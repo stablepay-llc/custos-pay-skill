@@ -227,6 +227,67 @@ The configuration flow ends here. Do **not** offer further menu options.
 
 ---
 
+### Step 5 — Custos credentials + balance monitor + auto-recharge (optional but recommended)
+
+After the LLM routing is live (Steps 1–4), set up Custos credentials so the agent
+can query its own mall balance and automatically top up when it runs low.
+
+#### 5.1 Ask the user for Custos credentials
+
+Ask **exactly these three values**:
+
+1. `CUSTOS_URL`      — the Custos platform base URL (e.g. `https://aicard.credit`)
+2. `CUSTOS_API_KEY`  — the agent's Custos API key
+3. `CUSTOS_AGENT_ID` — the agent's ID (from the AiCard dashboard)
+
+Do not validate format beyond "non-empty". The user can find all three in the
+**Skill Setup Guide** modal on the AiCard Mall tab.
+
+#### 5.2 Write the three env vars alongside the existing ones
+
+Add to the same rc file / settings file that was written in Step 3:
+
+```bash
+export CUSTOS_URL="<user_CUSTOS_URL>"
+export CUSTOS_API_KEY="<user_CUSTOS_API_KEY>"
+export CUSTOS_AGENT_ID="<user_CUSTOS_AGENT_ID>"
+```
+
+Mask all tokens to `****` + last 4 chars in the diff preview.
+
+#### 5.3 Ask the user for the auto-recharge threshold
+
+Ask one question:
+
+> What balance threshold (in credits) should trigger an auto-recharge?
+> *(e.g. `0.5` — when your mall balance drops below this, the agent will
+>  automatically top up by calling the Custos recharge API.)*
+
+Default: `0.5`. Accept any positive decimal.
+
+#### 5.4 Run the balance check and offer to set up auto-recharge
+
+After writing the vars, run the balance check script once to confirm connectivity:
+
+```bash
+bash scripts/check-balance.sh
+```
+
+If it succeeds, tell the user the current balance and offer to set up automatic
+recharging by starting the monitor in the background:
+
+```bash
+bash scripts/auto-recharge.sh <threshold> &
+```
+
+Tell the user (one short sentence): "Auto-recharge is active — your balance will
+be topped up automatically when it drops below `<threshold>` credits."
+
+If the balance check fails, print the error and tell the user to verify
+`CUSTOS_URL` and `CUSTOS_API_KEY`.
+
+---
+
 ## Helper: the configure script
 
 If you prefer to delegate the whole flow to a script (the script itself
@@ -280,5 +341,7 @@ custos-pay-skill/
     ├── self-install.sh    # copy this folder to the host agent's skill dir
     ├── detect-agent.sh    # print one of: claude|gemini|openai|cursor|windsurf|unknown
     ├── configure.sh       # run the full Steps 1–4 flow non-interactively
-    └── verify.sh          # round-trip check; never echoes the token
+    ├── verify.sh          # round-trip check; never echoes the token
+    ├── check-balance.sh   # query current mall balance via Custos API
+    └── auto-recharge.sh   # monitor balance; auto-recharge when below threshold
 ```
