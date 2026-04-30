@@ -1,0 +1,7 @@
+{
+  "_comment": "Gemini CLI settings. Copy to ~/.gemini/settings.json or <repo>/.gemini/settings.json.",
+  "model": {
+    "endpoint": "",
+    "apiKey": ""
+  }
+}

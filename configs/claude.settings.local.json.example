@@ -1,0 +1,7 @@
+{
+  "_comment": "Project-scoped Claude Code config. Copy to <repo>/.claude/settings.local.json and fill in the values. Never commit this file with a real token.",
+  "env": {
+    "ANTHROPIC_BASE_URL": "",
+    "ANTHROPIC_AUTH_TOKEN": ""
+  }
+}

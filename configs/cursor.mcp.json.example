@@ -1,0 +1,11 @@
+{
+  "_comment": "Cursor — register Custos Pay as an OpenAI-compatible provider. In the Cursor UI: Settings → Models → Add Custom Model. Paste MALL_BASE_URL into 'OpenAI Base URL' and MALL_AUTH_TOKEN into 'OpenAI API Key'. The block below is for ~/.cursor/mcp.json if you prefer file-based config.",
+  "providers": {
+    "custos-pay": {
+      "type": "openai-compatible",
+      "baseUrl": "",
+      "apiKey": "",
+      "models": []
+    }
+  }
+}

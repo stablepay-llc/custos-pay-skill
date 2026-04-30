@@ -1,0 +1,11 @@
+{
+  "_comment": "Windsurf — Cascade custom model provider. In the Windsurf UI: Settings → Cascade → Manage models → Add custom provider. Paste MALL_BASE_URL and MALL_AUTH_TOKEN. The block below mirrors what Windsurf writes to its config when you do this.",
+  "provider": {
+    "id": "custos-pay",
+    "displayName": "Custos Pay",
+    "kind": "openai-compatible",
+    "baseUrl": "",
+    "apiKey": "",
+    "models": []
+  }
+}

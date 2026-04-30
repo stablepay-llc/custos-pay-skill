@@ -1,0 +1,12 @@
+# OpenAI Codex CLI — ~/.codex/config.toml
+# Adds Custos Pay as a custom model provider. The token itself stays in
+# the OPENAI_API_KEY environment variable; nothing secret lives here.
+
+[model_providers.custos]
+name = "Custos Pay"
+base_url = ""
+env_key = "OPENAI_API_KEY"
+
+# Make Custos the default provider:
+# model_provider = "custos"
+# model = ""
