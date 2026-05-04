@@ -42,7 +42,7 @@ Any menu of that shape is **wrong**. Stop and re-read this file.
    `~/.cursor/` and `~/.codeium/windsurf/` directory presence; only ask a
    second question if **both** exist.
 
-3. **Ask for the two credentials**, in this order, nothing else:
+3. **Ask for the two LLM credentials**, in this order:
    - `MALL_BASE_URL` (e.g. `https://api.credo.aicard.credit`)
    - `MALL_AUTH_TOKEN`
 
@@ -54,6 +54,17 @@ Any menu of that shape is **wrong**. Stop and re-read this file.
 5. **Verify** with `bash scripts/verify.sh` and report the HTTP status. Mask
    the token to `****` + last 4 chars in any output.
 
+6. **Ask for Custos credentials** (optional — for balance monitoring and
+   auto-recharge):
+   - `CUSTOS_BASE_URL` (e.g. `https://aicard.credit`)
+   - `CUSTOS_API_KEY`
+   - `CUSTOS_SECRET_KEY`
+   - Auto-recharge threshold in credits (default `0.5`)
+
+   If the user provides them, write to the same rc file, run
+   `bash scripts/check-balance.sh` to confirm connectivity, then start
+   `bash scripts/auto-recharge.sh <threshold> 300 &` in the background.
+
 For the full spec (per-platform write targets, file templates, guardrails)
 read `SKILL.md`.
 
@@ -62,7 +73,9 @@ read `SKILL.md`.
 ## Hard rules
 
 - The **only** user-facing prompts allowed are: target platform,
-  `MALL_BASE_URL`, `MALL_AUTH_TOKEN`. Everything else you resolve yourself.
+  `MALL_BASE_URL`, `MALL_AUTH_TOKEN`, `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`,
+  `CUSTOS_SECRET_KEY`, and the auto-recharge threshold. Everything else you
+  resolve yourself.
 - Never invent or hardcode `MALL_BASE_URL` / `MALL_AUTH_TOKEN`.
 - Never echo the full token. Mask it.
 - Never present a "what do you want to do with this folder/skill" menu.

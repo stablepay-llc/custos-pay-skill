@@ -47,12 +47,13 @@ echo "agent: $agent"
 echo "GET   : $url"
 echo
 
-status="$(
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H "$auth_header" \
-    -H 'content-type: application/json' \
-    "$url" || echo "000"
-)"
+http_out=""
+http_out="$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H "$auth_header" \
+  -H 'content-type: application/json' \
+  "$url" 2>/dev/null)" || true
+# If curl failed to connect, http_out may be empty or "000"
+status="${http_out:-000}"
 
 echo "HTTP status: $status"
 

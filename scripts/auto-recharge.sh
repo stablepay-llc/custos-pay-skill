@@ -37,6 +37,11 @@ echo "[auto-recharge] threshold=${THRESHOLD} credits | interval=${INTERVAL}s"
 echo "[auto-recharge] gateway=${base}"
 echo
 
+# b64decode — portable base64 decode (GNU: -d, BSD/macOS: -D)
+b64decode() {
+  printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null
+}
+
 # ── Notification helpers ──────────────────────────────────────────────────────
 
 # notify <title> <body>
@@ -108,11 +113,16 @@ refresh_token() {
     return 1
   fi
 
+  local auth_json
+  auth_json="$(APIKEY="$CUSTOS_API_KEY" SIG="$sig" python3 -c "
+import json, os
+print(json.dumps({'apiKey': os.environ['APIKEY'], 'timestamp': $ts, 'signature': os.environ['SIG']}))
+")"
   auth_resp=$(
     curl -sS -w '\n__STATUS__%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
-      -d "{\"apiKey\":\"${CUSTOS_API_KEY}\",\"timestamp\":${ts},\"signature\":\"${sig}\"}" \
+      -d "$auth_json" \
       "${base}/api/v1/auth/token" 2>/dev/null
   )
   auth_body=$(echo "$auth_resp" | sed '$d')
@@ -145,9 +155,9 @@ refresh_token() {
   esac
 
   if command -v jq >/dev/null 2>&1; then
-    AGENT_ID=$(printf '%s' "$b64" | base64 -d 2>/dev/null | jq -r '.agentId // empty')
+    AGENT_ID=$(b64decode "$b64" | jq -r '.agentId // empty')
   else
-    AGENT_ID=$(printf '%s' "$b64" | base64 -d 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agentId',''))" 2>/dev/null)
+    AGENT_ID=$(b64decode "$b64" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agentId',''))" 2>/dev/null)
   fi
 
   echo "[auto-recharge] token refreshed, agent=${AGENT_ID}, expires in ${expires_in}s"

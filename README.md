@@ -16,7 +16,7 @@ the skill is the instruction):
    (1) Claude (Code / Desktop), (2) Gemini (CLI / Code Assist),
    (3) OpenAI / Codex / OpenAI-compatible, (4) Cursor / Windsurf.
    The detected host is pre-selected; just press Enter to accept.
-3. **Prompts you for exactly two values**: `MALL_BASE_URL` and `MALL_AUTH_TOKEN`.
+3. **Prompts you for `MALL_BASE_URL` and `MALL_AUTH_TOKEN`** (the LLM gateway credentials).
 4. **Writes** the platform-correct env vars / config file (e.g. appends to
    `~/.zshrc` and merges into `~/.claude/settings.json`) so the agent talks
    to your gateway instead of the vendor default.

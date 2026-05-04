@@ -22,6 +22,11 @@ set -u
 
 base="${CUSTOS_BASE_URL%/}"
 
+# b64decode — portable base64 decode (GNU: -d, BSD/macOS: -D)
+b64decode() {
+  printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null
+}
+
 # ── Step 1: HMAC sign ────────────────────────────────────────────────────────
 ts=$(date +%s)
 msg="v1:${ts}:${CUSTOS_API_KEY}"
@@ -33,11 +38,17 @@ if [ -z "$sig" ]; then
 fi
 
 # ── Step 2: Exchange for Bearer token ────────────────────────────────────────
+# Build JSON body safely — values are injected via python env vars, not argv
+auth_json="$(APIKEY="$CUSTOS_API_KEY" SIG="$sig" python3 -c "
+import json, os
+print(json.dumps({'apiKey': os.environ['APIKEY'], 'timestamp': $ts, 'signature': os.environ['SIG']}))
+")"
+
 auth_resp=$(
   curl -sS -w '\n__STATUS__%{http_code}' \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"apiKey\":\"${CUSTOS_API_KEY}\",\"timestamp\":${ts},\"signature\":\"${sig}\"}" \
+    -d "$auth_json" \
     "${base}/api/v1/auth/token" 2>&1
 )
 auth_body=$(echo "$auth_resp" | sed '$d')
@@ -72,9 +83,9 @@ case $(( ${#b64} % 4 )) in
 esac
 
 if command -v jq >/dev/null 2>&1; then
-  agent_id=$(printf '%s' "$b64" | base64 -d 2>/dev/null | jq -r '.agentId // empty')
+  agent_id=$(b64decode "$b64" | jq -r '.agentId // empty')
 else
-  agent_id=$(printf '%s' "$b64" | base64 -d 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agentId',''))" 2>/dev/null)
+  agent_id=$(b64decode "$b64" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agentId',''))" 2>/dev/null)
 fi
 
 if [ -z "$agent_id" ]; then

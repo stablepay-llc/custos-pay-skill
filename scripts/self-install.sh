@@ -46,6 +46,8 @@ fi
 
 mkdir -p "$(dirname "$dest")"
 cp -R "$here" "$dest"
+# Remove VCS metadata from the install — users should not see .git inside skills
+rm -rf "$dest/.git" 2>/dev/null || true
 echo "installed: $dest"
 echo
 echo "Next: run  bash $dest/scripts/configure.sh  to wire up MALL_BASE_URL + MALL_AUTH_TOKEN."
