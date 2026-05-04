@@ -24,7 +24,8 @@ detect="$here/scripts/detect-agent.sh"
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 mask() {
-  local s="${1:-}" n=${#s}
+  local s="${1:-}"
+  local n=${#s}
   [ "$n" -le 4 ] && printf '****' || printf '****%s' "${s: -4}"
 }
 
