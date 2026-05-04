@@ -17,10 +17,17 @@ The agent immediately starts the configuration flow — no extra prompt needed.
 
 ### Option B — manual copy
 
-```bash
-# Claude Code / Claude Desktop
-cp -R custos-pay-skill ~/.claude/skills/
+> **Warning for Claude Code users**: Do NOT copy to `~/.claude/skills/` unless
+> you want the configuration flow to run automatically every time you open a new
+> Claude Code session. The skill's instruction is "immediately configure on
+> discovery" — copying it to the global skills directory makes every new session
+> roost/hang while Claude attempts to run the setup flow.
+>
+> Use **Option A** (drag & drop, one-time) or **Option D** (run `configure.sh`
+> directly) instead. For Cursor, Windsurf, and Gemini the permanent install is
+> fine since those agents handle skill discovery differently.
 
+```bash
 # Cursor
 cp -R custos-pay-skill ~/.cursor/skills/
 
@@ -266,6 +273,75 @@ healthy.
   are never passed through process argv where they could appear in `ps` output.
 - Config writes are previewed and require confirmation before executing.
 - `.gitignore` is updated automatically when writing into a git repo.
+
+---
+
+## Troubleshooting
+
+### Claude Code hangs on startup ("Roosting" forever after typing anything)
+
+**Cause**: The `custos-pay-skill` folder was copied into `~/.claude/skills/`.
+Claude Code loads skills at startup and reads their instructions — this skill's
+instruction says "immediately run the configuration flow on discovery", so
+Claude tries to run `configure.sh` on every new session, causing it to roost
+while waiting for shell commands or credentials.
+
+**Fix**: Remove the skill from the global skills directory:
+
+```bash
+rm -rf ~/.claude/skills/custos-pay-skill
+```
+
+Then restart Claude Code. For future use, trigger configuration via drag & drop
+(one-time) or run `bash scripts/configure.sh` directly.
+
+### After testing the skill, new Claude Code sessions have no response
+
+**Cause**: `configure.sh` writes `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`
+to `~/.zshrc` and `~/.claude/settings.json`. If the gateway URL or token
+is no longer valid, new sessions cannot reach the API.
+
+**Fix**: Restore your working credentials in both places:
+
+```bash
+# 1. Check what's written
+grep 'ANTHROPIC_BASE_URL\|ANTHROPIC_AUTH_TOKEN' ~/.zshrc
+
+# 2. Update ~/.zshrc with your correct values
+#    (edit the lines to match your working gateway URL and token)
+
+# 3. Remove the env block from settings.json if you want to rely on zshrc only
+python3 - ~/.claude/settings.json <<'PY'
+import json,os,sys,tempfile
+p=sys.argv[1]; d=json.load(open(p))
+for k in ['ANTHROPIC_BASE_URL','ANTHROPIC_AUTH_TOKEN']:
+    d.get('env',{}).pop(k,None)
+if not d.get('env'): d.pop('env',None)
+fd,t=tempfile.mkstemp(dir=os.path.dirname(p))
+os.fdopen(fd,'w').write(json.dumps(d,indent=2)+'\n'); os.replace(t,p)
+print('done')
+PY
+
+# 4. Source and restart
+source ~/.zshrc
+```
+
+### Proxy causes Claude Code to hang even with correct gateway URL
+
+If your shell has `HTTP_PROXY` / `HTTPS_PROXY` set (e.g. ClashX at
+`127.0.0.1:7890`), Node.js (which Claude Code is built on) routes its HTTPS
+requests through the proxy. The proxy may block or slow connections to your
+gateway.
+
+**Quick test**:
+```bash
+unset HTTP_PROXY HTTPS_PROXY && claude
+```
+
+**Long-term fix** — add your gateway domain to `NO_PROXY` in `~/.zshrc`:
+```bash
+export NO_PROXY="localhost,127.0.0.1,your-gateway-domain.com"
+```
 
 ---
 
