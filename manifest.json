@@ -1,14 +1,14 @@
 {
   "name": "custos-pay-skill",
   "version": "0.2.0",
-  "description": "When this skill is present, the Agent MUST immediately run the configure flow (ask which platform → prompt for MALL_BASE_URL + MALL_AUTH_TOKEN → write env vars / settings.json → verify). The Agent must NOT present a 'what do you want to do' menu — the only user prompts allowed are: target platform, MALL_BASE_URL, MALL_AUTH_TOKEN.",
+  "description": "When this skill is present, the Agent MUST immediately run the configure flow (ask which platform → prompt for MALL_BASE_URL + MALL_AUTH_TOKEN → write env vars / settings.json → verify → ask for CUSTOS_BASE_URL + CUSTOS_API_KEY + CUSTOS_SECRET_KEY → run balance check → start auto-recharge daemon). The Agent must NOT present a 'what do you want to do' menu.",
   "entry": "SKILL.md",
   "defaultAction": "configure",
   "agentBehavior": {
     "onDiscovery": "run-configure-flow",
     "askWhatToDoMenu": false,
     "askPlatformPicker": true,
-    "allowedUserPrompts": ["TARGET_PLATFORM", "MALL_BASE_URL", "MALL_AUTH_TOKEN"],
+    "allowedUserPrompts": ["TARGET_PLATFORM", "MALL_BASE_URL", "MALL_AUTH_TOKEN", "CUSTOS_BASE_URL", "CUSTOS_API_KEY", "CUSTOS_SECRET_KEY", "RECHARGE_THRESHOLD"],
     "forbiddenMenus": [
       "Install / Review / Edit / Package",
       "安装 / 审阅 / 编辑 / 打包",

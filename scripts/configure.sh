@@ -338,5 +338,108 @@ EOF
 esac
 
 echo
-echo "✅ Done — your agent is now connected to Custos Pay. Happy hacking!"
-echo "(Verify anytime with: bash $here/scripts/verify.sh $agent)"
+echo "✅ LLM routing configured — your agent is now connected to Custos Pay."
+echo
+
+# ── Step 5 — Custos credentials + balance monitor ──────────────────────────
+echo "──────────────────────────────────────────────────────────────────────"
+echo "Step 5 — Balance monitoring + auto-recharge (optional but recommended)"
+echo "──────────────────────────────────────────────────────────────────────"
+echo
+echo "All five values are available via the \"Copy All\" button in the Skill"
+echo "Setup modal: AiCard dashboard → Mall tab → Skill button → Skill includes."
+echo
+printf 'CUSTOS_BASE_URL (e.g. https://aicard.credit, or press Enter to skip): ' >&2
+read -r custos_base
+
+if [ -z "$custos_base" ]; then
+  echo
+  echo "Skipped Custos setup. Run this script again to add it later."
+  echo "(Verify LLM routing anytime with: bash $here/scripts/verify.sh $agent)"
+  exit 0
+fi
+
+printf 'CUSTOS_API_KEY: ' >&2
+read -r custos_api_key
+
+printf 'CUSTOS_SECRET_KEY (input hidden): ' >&2
+stty -echo
+read -r custos_secret_key
+stty echo
+printf '\n' >&2
+
+if [ -z "$custos_api_key" ] || [ -z "$custos_secret_key" ]; then
+  echo "CUSTOS_API_KEY and CUSTOS_SECRET_KEY are both required for balance monitoring." >&2
+  exit 2
+fi
+
+printf 'Auto-recharge threshold in credits (default 0.5): ' >&2
+read -r threshold
+threshold="${threshold:-0.5}"
+
+masked_api="$(mask "$custos_api_key")"
+masked_secret="$(mask "$custos_secret_key")"
+
+echo
+echo "About to add Custos credentials:"
+echo "  CUSTOS_BASE_URL   : $custos_base"
+echo "  CUSTOS_API_KEY    : $masked_api"
+echo "  CUSTOS_SECRET_KEY : $masked_secret"
+echo "  recharge threshold: $threshold credits"
+echo "  writes            : $rc"
+echo
+confirm "Write?" || { echo "aborted"; exit 1; }
+
+# Re-write the env block to include all six vars in one idempotent block.
+case "$agent" in
+  claude)
+    write_env_block "$rc" \
+      "export ANTHROPIC_BASE_URL=\"$base\"" \
+      "export ANTHROPIC_AUTH_TOKEN=\"$token\"" \
+      "export CUSTOS_BASE_URL=\"$custos_base\"" \
+      "export CUSTOS_API_KEY=\"$custos_api_key\"" \
+      "export CUSTOS_SECRET_KEY=\"$custos_secret_key\""
+    merge_json_env "$HOME/.claude/settings.json" \
+      "ANTHROPIC_BASE_URL"   "$base" \
+      "ANTHROPIC_AUTH_TOKEN" "$token" \
+      "CUSTOS_BASE_URL"      "$custos_base" \
+      "CUSTOS_API_KEY"       "$custos_api_key" \
+      "CUSTOS_SECRET_KEY"    "$custos_secret_key"
+    ;;
+  gemini)
+    write_env_block "$rc" \
+      "export GOOGLE_GEMINI_BASE_URL=\"$base\"" \
+      "export GEMINI_API_KEY=\"$token\"" \
+      "export CUSTOS_BASE_URL=\"$custos_base\"" \
+      "export CUSTOS_API_KEY=\"$custos_api_key\"" \
+      "export CUSTOS_SECRET_KEY=\"$custos_secret_key\""
+    ;;
+  openai|cursor|windsurf)
+    write_env_block "$rc" \
+      "export OPENAI_BASE_URL=\"$base\"" \
+      "export OPENAI_API_KEY=\"$token\"" \
+      "export CUSTOS_BASE_URL=\"$custos_base\"" \
+      "export CUSTOS_API_KEY=\"$custos_api_key\"" \
+      "export CUSTOS_SECRET_KEY=\"$custos_secret_key\""
+    ;;
+esac
+
+echo
+echo "Checking balance..."
+if CUSTOS_BASE_URL="$custos_base" CUSTOS_API_KEY="$custos_api_key" CUSTOS_SECRET_KEY="$custos_secret_key" \
+    bash "$here/scripts/check-balance.sh" 2>&1; then
+  echo
+  echo "Starting auto-recharge monitor in the background..."
+  CUSTOS_BASE_URL="$custos_base" CUSTOS_API_KEY="$custos_api_key" CUSTOS_SECRET_KEY="$custos_secret_key" \
+    bash "$here/scripts/auto-recharge.sh" "$threshold" 300 &
+  echo "Auto-recharge active (PID=$!) — will top up when balance drops below $threshold credits."
+  echo "Stop with: kill $!"
+else
+  echo
+  echo "Balance check failed. Verify CUSTOS_BASE_URL, CUSTOS_API_KEY, and CUSTOS_SECRET_KEY."
+  echo "Run manually: bash $here/scripts/check-balance.sh"
+fi
+
+echo
+echo "✅ All done — LLM routing + balance monitoring configured. Happy hacking!"
+echo "(Verify LLM routing anytime with: bash $here/scripts/verify.sh $agent)"

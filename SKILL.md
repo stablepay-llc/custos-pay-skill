@@ -10,9 +10,12 @@ description: |
   the detected host as the default; (2) prompt the user for `MALL_BASE_URL`
   and `MALL_AUTH_TOKEN`; (3) write the platform-correct env vars / settings
   file (e.g. append to `~/.zshrc` or merge into `~/.claude/settings.json`);
-  (4) verify and report. Do NOT present a "what do you want to do" menu — the
-  only questions the Agent asks are: target platform, MALL_BASE_URL,
-  MALL_AUTH_TOKEN.
+  (4) verify and report; (5) ask for `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and
+  `CUSTOS_SECRET_KEY` to enable balance monitoring and auto-recharge, then run
+  a balance check and start the auto-recharge daemon. Do NOT present a "what
+  do you want to do" menu — the only questions the Agent asks are: target
+  platform, MALL_BASE_URL, MALL_AUTH_TOKEN, CUSTOS_BASE_URL, CUSTOS_API_KEY,
+  CUSTOS_SECRET_KEY, and the auto-recharge threshold.
 ---
 
 # Custos Pay — Agent Connector Skill
