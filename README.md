@@ -130,9 +130,34 @@ ok
 | HTTP status | Message | Fix |
 |-------------|---------|-----|
 | `2xx` | ok | — |
-| `401` / `403` | auth rejected — token likely wrong | Re-run configure and re-enter `MALL_AUTH_TOKEN`; use the **LLM Key** button in the dashboard to regenerate if needed |
+| `403` + "insufficient balance" | balance too low — rollback offered (see below) | Top up in AiCard Dashboard → Mall tab → Recharge |
+| `401` / `403` (other) | auth rejected — token likely wrong | Re-run configure and re-enter `MALL_AUTH_TOKEN`; use the **LLM Key** button in the dashboard to regenerate if needed |
 | `404` | endpoint not found — check MALL_BASE_URL path | Confirm the gateway base URL with your provider |
 | `000` | no response — DNS or TLS error | Check your network; confirm `MALL_BASE_URL` is reachable |
+
+**Insufficient balance — automatic rollback:**
+
+If the new gateway returns `403 insufficient balance`, configure.sh shows a
+top-up banner and offers to restore your previous provider automatically:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ⚠  Insufficient balance on the new gateway                  │
+│                                                              │
+│  Your Custos mall credit is too low to serve requests.       │
+│                                                              │
+│  Top up at:  AiCard Dashboard → Mall tab → Recharge          │
+│  Or run:     bash scripts/check-balance.sh                   │
+│              bash scripts/auto-recharge.sh                   │
+└──────────────────────────────────────────────────────────────┘
+
+Roll back to previous provider (****xyz)? [Y/n]
+```
+
+- Press **Enter** (or `Y`) to roll back immediately — the old credentials are
+  restored and you can keep working while you top up.
+- Type `n` to keep the new provider and top up first, then re-verify with
+  `bash scripts/verify.sh`.
 
 Even if verify returns non-2xx, the config is already written. Fix the value
 and run `bash scripts/verify.sh` again at any time.
