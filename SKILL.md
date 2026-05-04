@@ -135,6 +135,17 @@ Accept whatever they paste. Do not validate format beyond "non-empty".
 
 ### Step 3 — Write configuration for the chosen platform
 
+**Before writing**, read and store the current credentials so you can restore
+them if Step 4 (verify) fails:
+
+| Platform | Read before overwriting |
+|----------|------------------------|
+| Claude | `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` from env or `~/.claude/settings.json` |
+| Gemini | `GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY` |
+| OpenAI / Codex / Cursor / Windsurf | `OPENAI_BASE_URL` + `OPENAI_API_KEY` |
+
+Store these as `prev_base` and `prev_token` — you will need them if rollback is required.
+
 Apply the writes for the detected host. Always **show the user a one-line
 diff preview before writing** (path + masked token), then write.
 
@@ -221,6 +232,21 @@ the Windsurf config file, substituting the two values.
    chars. Never print the full token.
 2. Run `bash scripts/verify.sh` if available — it round-trips
    `${MALL_BASE_URL}/models` with the supplied token and reports HTTP status only.
+   - **Exit 0** (2xx) → proceed to step 3.
+   - **Exit 3** (403 + insufficient balance) → the new gateway has no credits.
+     Immediately call:
+     ```bash
+     bash scripts/rollback.sh <agent> "<prev_base>" "<prev_token>"
+     ```
+     replacing `<agent>` with the platform token from Step 1 (`claude`, `gemini`,
+     `openai`, `cursor`, or `windsurf`) and `<prev_base>` / `<prev_token>` with
+     the credentials you stored in Step 3. Then tell the user:
+     > "Your Custos mall balance is insufficient. Previous provider has been
+     > restored. Top up at: AiCard Dashboard → Mall tab → Recharge, then run
+     > the skill again."
+     Stop here — do not proceed to Step 5.
+   - **Exit 1** (other auth error) → print the error and tell the user to
+     verify `MALL_BASE_URL` and `MALL_AUTH_TOKEN`. Do not auto-rollback.
 3. Tell the user (one short sentence) that the agent is now connected and they
    can start using it immediately — e.g. "Done — your agent is connected to
    Custos Pay. Happy hacking!". Do NOT tell the user to restart their terminal,
@@ -351,7 +377,8 @@ custos-pay-skill/
     ├── self-install.sh    # copy this folder to the host agent's skill dir
     ├── detect-agent.sh    # print one of: claude|gemini|openai|cursor|windsurf|unknown
     ├── configure.sh       # run the full Steps 1–4 flow non-interactively
-    ├── verify.sh          # round-trip check; never echoes the token
+    ├── verify.sh          # round-trip check; exit 0=ok, 1=error, 3=insufficient balance
+    ├── rollback.sh        # restore previous provider credentials (called on exit 3)
     ├── check-balance.sh   # query current mall balance via Custos API
     └── auto-recharge.sh   # monitor balance; auto-recharge when below threshold
 ```
