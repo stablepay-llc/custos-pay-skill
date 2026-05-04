@@ -37,6 +37,62 @@ echo "[auto-recharge] threshold=${THRESHOLD} credits | interval=${INTERVAL}s"
 echo "[auto-recharge] gateway=${base}"
 echo
 
+# ── Notification helpers ──────────────────────────────────────────────────────
+
+# notify <title> <body>
+# Desktop notification (macOS / Linux) + terminal banner + bell.
+# Silent if neither osascript nor notify-send is available.
+notify() {
+  local title="$1" body="$2"
+  # macOS
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"${body}\" with title \"${title}\"" 2>/dev/null || true
+  # Linux (libnotify)
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send --urgency=critical "$title" "$body" 2>/dev/null || true
+  fi
+  # Terminal banner — always shown
+  local line
+  line="$(printf '─%.0s' $(seq 1 60))"
+  printf '\a' >&2
+  echo >&2
+  echo "┌${line}┐" >&2
+  printf "│  %-58s│\n" "⚠  ${title}" >&2
+  printf "│  %-58s│\n" "${body}" >&2
+  echo "└${line}┘" >&2
+  echo >&2
+}
+
+# parse_recharge_error <http_status> <body>
+# Prints a single human-readable sentence describing why the recharge failed.
+parse_recharge_error() {
+  local status="$1" body="$2"
+  case "$status" in
+    402)
+      if echo "$body" | grep -qi "SpendPermission"; then
+        echo "SpendPermission not set up — grant one in the AiCard Dashboard → Developer tab."
+      elif echo "$body" | grep -qi "limit\|remaining"; then
+        echo "Recharge quota reached — top up your limit in the AiCard Dashboard → Admin → Mall."
+      else
+        echo "Payment required (HTTP 402) — check your Custos account configuration."
+      fi ;;
+    403)
+      echo "Access denied (HTTP 403) — check CUSTOS_API_KEY and account permissions." ;;
+    429)
+      echo "Rate limit hit (HTTP 429) — too many recharge attempts. Will retry next interval." ;;
+    5*)
+      if echo "$body" | grep -qi "limit\|remaining\|quota\|exceeded"; then
+        echo "Recharge quota fence hit — only partial credit remaining. Check AiCard Dashboard → Admin → Mall."
+      elif echo "$body" | grep -qi "balance\|insufficient\|funds"; then
+        echo "Insufficient on-chain USDC — top up the smart account wallet on Base."
+      else
+        echo "Gateway error (HTTP ${status}) — relay or CDP may be temporarily unavailable."
+      fi ;;
+    *)
+      echo "Recharge failed (HTTP ${status}) — check logs above for details." ;;
+  esac
+}
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 ACCESS_TOKEN=""
@@ -137,9 +193,13 @@ do_recharge() {
   status=$(echo "$resp" | tail -n1 | sed 's/__STATUS__//')
   if echo "$status" | grep -q '^2'; then
     echo "[auto-recharge] recharge ok — ${body}"
+    RECHARGE_FAIL_COUNT=0
     return 0
   else
     echo "[auto-recharge] recharge failed (HTTP ${status}): ${body}" >&2
+    RECHARGE_FAIL_COUNT=$(( RECHARGE_FAIL_COUNT + 1 ))
+    LAST_FAIL_STATUS="$status"
+    LAST_FAIL_BODY="$body"
     # Force token refresh on next iteration in case it expired mid-run
     ACCESS_TOKEN=""
     return 1
@@ -150,6 +210,12 @@ do_recharge() {
 
 trap 'echo "[auto-recharge] stopped (PID=$$)"; exit 0' INT TERM
 
+# Failure tracking — notify on first failure, then every NOTIFY_EVERY_N failures.
+RECHARGE_FAIL_COUNT=0
+LAST_FAIL_STATUS=""
+LAST_FAIL_BODY=""
+NOTIFY_EVERY_N=3   # re-notify every N consecutive failures after the first
+
 while true; do
   balance="$(get_balance)"
 
@@ -159,9 +225,31 @@ while true; do
     ts="$(date -u +%H:%M:%SZ)"
     needs_recharge="$(awk -v b="$balance" -v t="$THRESHOLD" 'BEGIN { print (b+0 < t+0) ? "yes" : "no" }')"
     echo "[auto-recharge] ${ts} — balance: ${balance} credits (threshold: ${THRESHOLD})"
+
     if [ "$needs_recharge" = "yes" ]; then
       echo "[auto-recharge] balance below threshold — triggering recharge..."
+      prev_fail="$RECHARGE_FAIL_COUNT"
       do_recharge || true
+
+      # Notify on first failure and every NOTIFY_EVERY_N after that.
+      if [ "$RECHARGE_FAIL_COUNT" -gt "$prev_fail" ]; then
+        should_notify="no"
+        if [ "$RECHARGE_FAIL_COUNT" -eq 1 ]; then
+          should_notify="yes"
+        elif [ $(( RECHARGE_FAIL_COUNT % NOTIFY_EVERY_N )) -eq 0 ]; then
+          should_notify="yes"
+        fi
+
+        if [ "$should_notify" = "yes" ]; then
+          reason="$(parse_recharge_error "$LAST_FAIL_STATUS" "$LAST_FAIL_BODY")"
+          notify \
+            "Custos Pay — auto-recharge failed (attempt #${RECHARGE_FAIL_COUNT})" \
+            "Mall balance: ${balance} credits | ${reason}"
+        fi
+      fi
+    else
+      # Balance is healthy — reset failure counter silently.
+      RECHARGE_FAIL_COUNT=0
     fi
   fi
 
