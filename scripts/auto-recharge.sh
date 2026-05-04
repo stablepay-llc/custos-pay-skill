@@ -160,7 +160,7 @@ print(json.dumps({'apiKey': os.environ['APIKEY'], 'timestamp': $ts, 'signature':
     AGENT_ID=$(b64decode "$b64" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agentId',''))" 2>/dev/null)
   fi
 
-  echo "[auto-recharge] token refreshed, agent=${AGENT_ID}, expires in ${expires_in}s"
+  echo "[auto-recharge] token refreshed, agent=${AGENT_ID}, expires in ${expires_in}s" >&2
 }
 
 ensure_token() {
