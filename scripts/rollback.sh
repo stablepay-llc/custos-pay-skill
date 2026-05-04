@@ -2,14 +2,17 @@
 # rollback.sh — restore the previous LLM provider credentials.
 #
 # Usage:
-#   bash scripts/rollback.sh <agent> <prev_base_url> <prev_token>
+#   bash scripts/rollback.sh                           # reads ~/.custos-prev-provider.json
+#   bash scripts/rollback.sh <agent> <prev_base> <prev_token>
 #
-# Called automatically by configure.sh on verify exit 3 (insufficient balance).
-# Can also be called manually by an AI agent after a failed verify.
+# Called by:
+#   - configure.sh on verify exit 3 (insufficient balance)
+#   - AI agents via `/custos-pay-skill rollback` slash command
+#   - Users manually after a bad configure run
 #
 # Exit codes:
 #   0 — restored successfully
-#   2 — missing arguments
+#   2 — missing arguments and no saved state found
 
 set -euo pipefail
 
@@ -19,11 +22,24 @@ agent="${1:-}"
 prev_base="${2:-}"
 prev_token="${3:-}"
 
+# If no args, try reading the saved state file written by configure.sh
+_prev_state_file="$HOME/.custos-prev-provider.json"
+if [ -z "$agent" ] && [ -f "$_prev_state_file" ]; then
+  agent="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('agent',''))" "$_prev_state_file" 2>/dev/null || true)"
+  prev_base="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('prev_base',''))" "$_prev_state_file" 2>/dev/null || true)"
+  prev_token="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('prev_token',''))" "$_prev_state_file" 2>/dev/null || true)"
+fi
+
 if [ -z "$agent" ] || [ -z "$prev_base" ] || [ -z "$prev_token" ]; then
+  echo "No previous provider state found." >&2
+  echo >&2
   echo "Usage: bash scripts/rollback.sh <agent> <prev_base_url> <prev_token>" >&2
   echo "  agent      : claude | gemini | openai | cursor | windsurf" >&2
   echo "  prev_base  : previous MALL_BASE_URL value" >&2
   echo "  prev_token : previous MALL_AUTH_TOKEN value" >&2
+  echo >&2
+  echo "Or run configure.sh again to set up a new provider — it saves the" >&2
+  echo "previous state automatically before overwriting." >&2
   exit 2
 fi
 

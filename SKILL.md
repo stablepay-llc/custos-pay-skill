@@ -52,6 +52,27 @@ description: |
 
 ---
 
+## Invocation argument: `rollback`
+
+If the user typed `/custos-pay-skill rollback` (i.e., `$ARGUMENTS` contains
+`rollback`), **stop here and run only the rollback flow below**. Do NOT
+proceed to Steps 0–5.
+
+### Rollback flow
+
+1. Run `bash scripts/rollback.sh` with **no arguments** — it reads the
+   previous credentials from `~/.custos-prev-provider.json` (written
+   automatically by configure.sh before every overwrite).
+2. If the script exits 0, tell the user:
+   > "Previous provider restored. Run `source ~/.zshrc` if you want the
+   > change to apply in the current terminal immediately."
+3. If the script exits 2 (no saved state), tell the user:
+   > "No previous provider saved. Run `bash scripts/rollback.sh <agent>
+   > <prev_base_url> <prev_token>` manually, or run configure.sh again
+   > to set up a new provider (it saves the old one automatically)."
+
+---
+
 ## Default behavior when this skill is invoked
 
 Execute the steps below **in order, without prompting for confirmation

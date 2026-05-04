@@ -16,6 +16,23 @@ Any menu of that shape is **wrong**. Stop and re-read this file.
 
 ---
 
+## Invocation argument: `rollback`
+
+If the user invoked this skill with the argument `rollback` (e.g., typed
+`/custos-pay-skill rollback` in Claude Code), **do only this** — skip steps
+1–6 below entirely:
+
+1. Run `bash scripts/rollback.sh` (no arguments). It reads the previous
+   provider from `~/.custos-prev-provider.json`, which is saved automatically
+   by configure.sh before every overwrite.
+2. If it succeeds, tell the user: "Previous provider restored. Run
+   `source ~/.zshrc` to apply in the current shell."
+3. If it exits 2 (no saved state), tell the user: "No previous provider
+   saved. Run configure.sh again to set up a new provider — it will save the
+   current one automatically before overwriting."
+
+---
+
 ## What you must do, immediately
 
 1. **Self-install** — if this folder is not already at the host agent's skill

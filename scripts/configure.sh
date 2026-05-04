@@ -405,6 +405,23 @@ case "$agent" in
     ;;
 esac
 
+# Persist prev state so `rollback.sh` (and `/custos-pay-skill rollback`) can
+# restore without needing arguments.
+_prev_state_file="$HOME/.custos-prev-provider.json"
+if [ -n "$_prev_base" ]; then
+  python3 - "$_prev_state_file" "$agent" "$_prev_base" "$_prev_token" <<'PY'
+import json, os, sys, tempfile
+target, agent, base, token = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+data = {"agent": agent, "prev_base": base, "prev_token": token}
+fd, tmp = tempfile.mkstemp(prefix='.custos-', dir=os.path.dirname(target) or os.path.expanduser('~'))
+os.chmod(fd, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+os.replace(tmp, target)
+PY
+fi
+
 # ── Rollback helper ───────────────────────────────────────────────────────────
 _rollback() {
   [ -z "$_prev_base" ] && { echo "No previous provider to restore." >&2; return; }
