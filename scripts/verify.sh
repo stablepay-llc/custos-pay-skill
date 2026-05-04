@@ -47,20 +47,28 @@ echo "agent: $agent"
 echo "GET   : $url"
 echo
 
-http_out=""
-http_out="$(curl -sS -o /dev/null -w '%{http_code}' \
+resp=""
+resp="$(curl -sS -w '\n__STATUS__%{http_code}' \
   -H "$auth_header" \
   -H 'content-type: application/json' \
   "$url" 2>/dev/null)" || true
-# If curl failed to connect, http_out may be empty or "000"
-status="${http_out:-000}"
+
+body="$(printf '%s' "$resp" | sed '$d')"
+status="$(printf '%s' "$resp" | tail -n1 | sed 's/__STATUS__//')"
+status="${status:-000}"
 
 echo "HTTP status: $status"
 
 case "$status" in
   2*) echo "ok"; exit 0 ;;
-  401|403) echo "auth rejected — token likely wrong"; exit 1 ;;
+  401|403)
+    if printf '%s' "$body" | grep -qi 'insufficient.*balance\|balance.*insufficient\|billing'; then
+      echo "insufficient_balance"
+      exit 3
+    fi
+    echo "auth rejected — token likely wrong"
+    exit 1 ;;
   404) echo "endpoint not found — check MALL_BASE_URL path"; exit 1 ;;
   000) echo "no response — DNS or TLS error"; exit 1 ;;
-  *)  echo "unexpected status"; exit 1 ;;
+  *)   echo "unexpected status"; exit 1 ;;
 esac

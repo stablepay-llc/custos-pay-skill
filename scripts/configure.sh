@@ -388,6 +388,52 @@ esac
 echo >&2
 confirm "Write?" || { echo "aborted"; exit 1; }
 
+# ── Backup existing credentials before overwriting ────────────────────────────
+_prev_base="" _prev_token=""
+case "$agent" in
+  claude)
+    _prev_base="${ANTHROPIC_BASE_URL:-}"
+    _prev_token="${ANTHROPIC_AUTH_TOKEN:-${ANTHROPIC_API_KEY:-}}"
+    ;;
+  gemini)
+    _prev_base="${GOOGLE_GEMINI_BASE_URL:-}"
+    _prev_token="${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}"
+    ;;
+  openai|cursor|windsurf)
+    _prev_base="${OPENAI_BASE_URL:-}"
+    _prev_token="${OPENAI_API_KEY:-}"
+    ;;
+esac
+
+# ── Rollback helper ───────────────────────────────────────────────────────────
+_rollback() {
+  [ -z "$_prev_base" ] && { echo "No previous provider to restore." >&2; return; }
+  echo >&2
+  echo "Rolling back to previous provider..." >&2
+  case "$agent" in
+    claude)
+      write_env_block "$rc" \
+        "ANTHROPIC_BASE_URL"   "$_prev_base" \
+        "ANTHROPIC_AUTH_TOKEN" "$_prev_token"
+      merge_json_env "$HOME/.claude/settings.json" \
+        "ANTHROPIC_BASE_URL"   "$_prev_base" \
+        "ANTHROPIC_AUTH_TOKEN" "$_prev_token"
+      ;;
+    gemini)
+      write_env_block "$rc" \
+        "GOOGLE_GEMINI_BASE_URL" "$_prev_base" \
+        "GEMINI_API_KEY"         "$_prev_token"
+      ;;
+    openai|cursor|windsurf)
+      write_env_block "$rc" \
+        "OPENAI_BASE_URL" "$_prev_base" \
+        "OPENAI_API_KEY"  "$_prev_token"
+      ;;
+  esac
+  echo "Restored previous provider: $(mask "$_prev_base")" >&2
+  echo "Run: source $rc   (to apply in current shell)" >&2
+}
+
 case "$agent" in
   claude)
     write_env_block "$rc" \
@@ -433,7 +479,37 @@ esac
 # ── Step 4: Verify ────────────────────────────────────────────────────────────
 echo >&2
 echo "Verifying LLM routing..." >&2
-if bash "$here/scripts/verify.sh" "$agent" 2>&1; then
+verify_exit=0
+bash "$here/scripts/verify.sh" "$agent" 2>&1 || verify_exit=$?
+
+if [ "$verify_exit" -eq 0 ]; then
+  echo >&2
+elif [ "$verify_exit" -eq 3 ]; then
+  # Insufficient balance
+  echo >&2
+  cat >&2 <<'MSG'
+┌──────────────────────────────────────────────────────────────┐
+│  ⚠  Insufficient balance on the new gateway                  │
+│                                                              │
+│  Your Custos mall credit is too low to serve requests.       │
+│                                                              │
+│  Top up at:  AiCard Dashboard → Mall tab → Recharge          │
+│  Or run:     bash scripts/check-balance.sh                   │
+│              bash scripts/auto-recharge.sh                   │
+└──────────────────────────────────────────────────────────────┘
+MSG
+  if [ -n "$_prev_base" ]; then
+    echo >&2
+    printf 'Roll back to previous provider (%s)? [Y/n] ' "$(mask "$_prev_base")" >&2
+    rb=""
+    read -r rb || true
+    case "${rb:-Y}" in
+      n|N|no|NO) echo "Keeping new provider. Top up and re-verify with: bash scripts/verify.sh $agent" >&2 ;;
+      *)         _rollback ;;
+    esac
+  else
+    echo "Top up your balance then re-verify: bash scripts/verify.sh $agent" >&2
+  fi
   echo >&2
 else
   echo >&2
