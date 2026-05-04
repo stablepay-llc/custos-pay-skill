@@ -21,6 +21,7 @@ set -u
 : "${CUSTOS_SECRET_KEY:?CUSTOS_SECRET_KEY is required}"
 
 base="${CUSTOS_BASE_URL%/}"
+_host="$(printf '%s' "$base" | sed 's|https\?://||' | cut -d'/' -f1 | cut -d':' -f1)"
 
 # b64decode — portable base64 decode (GNU: -d, BSD/macOS: -D)
 b64decode() {
@@ -45,7 +46,7 @@ print(json.dumps({'apiKey': os.environ['APIKEY'], 'timestamp': $ts, 'signature':
 ")"
 
 auth_resp=$(
-  curl -sS -w '\n__STATUS__%{http_code}' \
+  curl -sS --noproxy "$_host" -w '\n__STATUS__%{http_code}' \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$auth_json" \
@@ -95,7 +96,7 @@ fi
 
 # ── Step 4: Fetch balance ─────────────────────────────────────────────────────
 response=$(
-  curl -sS -w '\n__HTTP_STATUS__%{http_code}' \
+  curl -sS --noproxy "$_host" -w '\n__HTTP_STATUS__%{http_code}' \
     "${base}/api/mall/balance?agentId=${agent_id}" 2>&1
 )
 

@@ -31,6 +31,7 @@ INTERVAL="${2:-300}"
 : "${CUSTOS_SECRET_KEY:?CUSTOS_SECRET_KEY is required}"
 
 base="${CUSTOS_BASE_URL%/}"
+_host="$(printf '%s' "$base" | sed 's|https\?://||' | cut -d'/' -f1 | cut -d':' -f1)"
 
 echo "[auto-recharge] started  PID=$$"
 echo "[auto-recharge] threshold=${THRESHOLD} credits | interval=${INTERVAL}s"
@@ -119,7 +120,7 @@ import json, os
 print(json.dumps({'apiKey': os.environ['APIKEY'], 'timestamp': $ts, 'signature': os.environ['SIG']}))
 ")"
   auth_resp=$(
-    curl -sS -w '\n__STATUS__%{http_code}' \
+    curl -sS --noproxy "$_host" -w '\n__STATUS__%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
       -d "$auth_json" \
@@ -173,7 +174,7 @@ get_balance() {
   ensure_token || { echo "ERR"; return; }
   local resp body status
   resp=$(
-    curl -sS -w '\n__STATUS__%{http_code}' \
+    curl -sS --noproxy "$_host" -w '\n__STATUS__%{http_code}' \
       "${base}/api/mall/balance?agentId=${AGENT_ID}" 2>/dev/null
   )
   body=$(echo "$resp" | sed '$d')
@@ -193,7 +194,7 @@ do_recharge() {
   ensure_token || return 1
   local resp body status
   resp=$(
-    curl -sS -w '\n__STATUS__%{http_code}' \
+    curl -sS --noproxy "$_host" -w '\n__STATUS__%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer ${ACCESS_TOKEN}" \

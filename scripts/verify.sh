@@ -42,13 +42,14 @@ fi
 
 trimmed_base="${base%/}"
 url="${trimmed_base}${path}"
+_host="$(printf '%s' "$trimmed_base" | sed 's|https\?://||' | cut -d'/' -f1 | cut -d':' -f1)"
 
 echo "agent: $agent"
 echo "GET   : $url"
 echo
 
 resp=""
-resp="$(curl -sS -w '\n__STATUS__%{http_code}' \
+resp="$(curl -sS --noproxy "$_host" -w '\n__STATUS__%{http_code}' \
   -H "$auth_header" \
   -H 'content-type: application/json' \
   "$url" 2>/dev/null)" || true
