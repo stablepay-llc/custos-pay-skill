@@ -86,15 +86,22 @@ Any menu of that shape is **wrong**. Stop and re-read this file.
    in `~/.claude/settings.json` with id `custos-pay-skill` (idempotent,
    replaces prior registration, never duplicates). The hook reads the
    shared balance cache populated by the auto-recharge daemon, falls back
-   to a live `check-balance.sh` call on cache miss (30 s TTL), and prints
-   a friendly banner + desktop notification when balance dips below
-   `RECHARGE_THRESHOLD`. **In addition to warning, the hook spawns
-   `scripts/recharge-once.sh` in the background to top up immediately
-   instead of waiting 5 minutes for the daemon poll.** `recharge-once.sh`
-   debounces (60 s) and locks (atomic mkdir) so concurrent Stop hooks
-   never double-charge. Other platforms (Gemini / OpenAI / Cursor /
-   Windsurf) skip this step — their hosts have no equivalent hook
-   contract, but they can still use `recharge-once.sh` ad-hoc.
+   to a live `check-balance.sh` call on cache miss (30 s TTL), and surfaces
+   a friendly warning to the user when balance dips below
+   `RECHARGE_THRESHOLD`. **The warning is emitted via Claude Code's
+   `systemMessage` JSON protocol** — earlier prototypes wrote to
+   `/dev/tty` but raced against Claude Code's UI redraw and were getting
+   clobbered, so the hook now outputs a JSON envelope on stdout that
+   Claude Code renders cleanly into the conversation flow. A desktop
+   notification + an append to `~/.cache/custos-pay/banner.log` are sent
+   in parallel as redundant channels. **In addition to warning, the hook
+   spawns `scripts/recharge-once.sh` in the background to top up
+   immediately** instead of waiting 5 minutes for the daemon poll.
+   `recharge-once.sh` debounces (60 s) and locks (atomic mkdir) so
+   concurrent Stop hooks never double-charge. Other platforms (Gemini /
+   OpenAI / Cursor / Windsurf) skip this step — their hosts have no
+   equivalent hook contract, but they can still use `recharge-once.sh`
+   ad-hoc.
 
 8. **Print a final summary** with: agent, LLM routing status, balance
    value, auto-recharge state.

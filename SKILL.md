@@ -294,9 +294,31 @@ is `claude` and the user supplied `CUSTOS_*`, register a `Stop` hook in
 `~/.claude/skills/custos-pay-skill/scripts/balance-guard.sh`. The hook fires
 after every assistant response, reads the shared balance cache (30 s TTL,
 falls back to a one-shot `check-balance.sh` call on miss), compares against
-`RECHARGE_THRESHOLD`, and — only when below threshold — emits a friendly
-boxed banner directly to the user's controlling TTY plus a desktop
-notification. The hook always exits 0 and never blocks Claude.
+`RECHARGE_THRESHOLD`, and — only when below threshold — surfaces a friendly
+warning to the user. The hook always exits 0 and never blocks Claude.
+
+**Output channels** (chosen by invocation context):
+1. **Hook mode** (stdout is captured by Claude Code; the common case)
+   — emit a JSON envelope on stdout following Claude Code's Stop-hook
+   protocol:
+   ```json
+   {
+     "systemMessage": "⚠ Custos Pay balance is low\nbalance: ... credits\nthreshold: ... credits\n<status>",
+     "continue": true,
+     "suppressOutput": false
+   }
+   ```
+   Claude Code renders `systemMessage` as part of the conversation flow
+   between the assistant turn and the next user prompt, **safe from the
+   live UI redraw**. (An earlier version wrote the banner directly to
+   `/dev/tty`; that raced with Claude Code's spinner / status indicators
+   and got clobbered. The JSON path is the supported fix.)
+2. **Manual mode** (stdout is a TTY and `$CLAUDECODE` is unset, e.g.
+   running `bash balance-guard.sh` from a shell to debug) — print an
+   ASCII boxed banner straight to stdout for human inspection.
+3. **Always** — desktop notification via `osascript` / `notify-send`,
+   plus an append to `~/.cache/custos-pay/banner.log` so the user can
+   `tail` the audit trail.
 
 **Auto-recharge from the hook.** When the banner fires, the hook also spawns
 `scripts/recharge-once.sh` in the **background** (via `nohup … &` in a

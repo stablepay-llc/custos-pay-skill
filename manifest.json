@@ -1,6 +1,6 @@
 {
   "name": "custos-pay-skill",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "When this skill is present, the Agent MUST immediately run the configure flow: (1) ask which platform; (2) ask the user to paste a single KEY=VALUE config block containing MALL_BASE_URL, MALL_AUTH_TOKEN, and optional CUSTOS_BASE_URL/CUSTOS_API_KEY/CUSTOS_SECRET_KEY/RECHARGE_THRESHOLD — never key-by-key; (3) write env vars / settings.json; (4) verify LLM routing AND query the Custos balance and PRINT it to the user; (5) auto-start the recharge daemon; (6) on Claude only, register a Stop hook (balance-guard.sh) that runs after every assistant response, reads a shared balance cache, warns when balance < RECHARGE_THRESHOLD, and ASYNC-spawns recharge-once.sh to top up immediately (debounced 60s, mkdir-locked). The Agent must NOT present a 'what do you want to do' menu.",
   "entry": "SKILL.md",
   "defaultAction": "configure",
@@ -27,7 +27,7 @@
       "command": "bash $HOME/.claude/skills/custos-pay-skill/scripts/balance-guard.sh",
       "id": "custos-pay-skill",
       "trigger": "fires after every assistant response",
-      "behaviour": "reads ~/.cache/custos-pay/balance.json (30s TTL); on cache miss runs check-balance.sh once; if balance < RECHARGE_THRESHOLD writes a friendly banner to /dev/tty (or stderr fallback), emits a desktop notification, AND spawns recharge-once.sh in the background for an immediate top-up; always exits 0",
+      "behaviour": "reads ~/.cache/custos-pay/balance.json (30s TTL); on cache miss runs check-balance.sh once; if balance < RECHARGE_THRESHOLD emits a JSON systemMessage envelope on stdout (Claude Code Stop-hook protocol — survives UI redraw), prints an ASCII box only when stdout is a TTY (manual debug runs), appends to ~/.cache/custos-pay/banner.log, fires a desktop notification, AND spawns recharge-once.sh in the background for an immediate top-up; always exits 0",
       "idempotent": true,
       "neverBlocks": true,
       "asyncRecharge": {

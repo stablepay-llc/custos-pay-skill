@@ -113,18 +113,31 @@ elif [ -f "$ts_file" ]; then
   fi
 fi
 
-# ── 4. Emit a friendly banner + desktop notification ─────────────────────────
-emit_banner() {
-  local out_target="$1" status_line
-  # Keep status_line ≤ 57 chars so it fits the 62-col inner box width.
-  case "$recharge_action" in
-    trigger)
-      status_line="Auto-recharge fired in background - settling now." ;;
-    debounced)
-      status_line="Auto-recharge already in flight - waiting it out." ;;
-    unavailable)
-      status_line="Run scripts/auto-recharge.sh to top up manually." ;;
-  esac
+# ── 4. Surface the warning to the user ───────────────────────────────────────
+# Pick the short status line. Keep ≤ 57 chars so it fits the manual-mode
+# 62-col ASCII box.
+case "$recharge_action" in
+  trigger)
+    status_line="Auto-recharge fired in background - settling now." ;;
+  debounced)
+    status_line="Auto-recharge already in flight - waiting it out." ;;
+  unavailable)
+    status_line="Run scripts/auto-recharge.sh to top up manually." ;;
+esac
+
+# Always log a copy so the user can audit history:
+#   tail ~/.cache/custos-pay/banner.log
+banner_log="$cache_dir/banner.log"
+{
+  printf '\n=== %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+  printf 'balance:   %s credits\n' "$balance"
+  printf 'threshold: %s credits\n' "$threshold"
+  printf 'action:    %s\n' "$recharge_action"
+  printf 'status:    %s\n' "$status_line"
+} >> "$banner_log" 2>/dev/null
+
+emit_box_banner() {
+  local out_target="$1"
   {
     echo
     echo "┌──────────────────────────────────────────────────────────────┐"
@@ -137,18 +150,40 @@ emit_banner() {
   } > "$out_target" 2>/dev/null
 }
 
-# Prefer writing directly to the controlling TTY so Claude Code's stdio
-# capture doesn't swallow the banner. `[ -w /dev/tty ]` returns true when
-# the file exists, but the actual open() can still fail in headless
-# contexts (e.g. CI, API-only runs) — probe with a real write before
-# committing.
-if ( : > /dev/tty ) 2>/dev/null; then
-  emit_banner /dev/tty
+emit_hook_system_message() {
+  # Use Claude Code's documented Stop-hook JSON output so the message is
+  # rendered as part of the conversation transcript instead of racing
+  # against the live UI redraw on /dev/tty.
+  local body
+  body="$(cat <<MSG
+⚠ Custos Pay balance is low
+balance:   ${balance} credits
+threshold: ${threshold} credits
+${status_line}
+MSG
+)"
+  MSG="$body" python3 -c "
+import json, os
+print(json.dumps({
+    'systemMessage': os.environ['MSG'],
+    'continue': True,
+    'suppressOutput': False,
+}))
+"
+}
+
+# Choose channel based on how the script was invoked:
+#   * Claude Code Stop hook  — stdout is captured (pipe), CLAUDECODE=1
+#       → emit JSON systemMessage; Claude Code renders it in-flow.
+#   * Manual / standalone run — stdout is a TTY, CLAUDECODE unset
+#       → print the ASCII box banner straight to the terminal.
+if [ -t 1 ] && [ -z "${CLAUDECODE:-}" ]; then
+  emit_box_banner /dev/stdout
 else
-  emit_banner /dev/stderr
+  emit_hook_system_message
 fi
 
-# Desktop notification — best-effort, never fatal.
+# Desktop notification — most reliable channel; never fatal.
 if command -v osascript >/dev/null 2>&1; then
   osascript -e "display notification \"balance: ${balance} credits (threshold ${threshold})\" with title \"Custos Pay — balance low\"" >/dev/null 2>&1 || true
 elif command -v notify-send >/dev/null 2>&1; then
