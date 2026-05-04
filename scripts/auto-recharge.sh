@@ -91,8 +91,12 @@ parse_recharge_error() {
         echo "Recharge quota fence hit — only partial credit remaining. Check AiCard Dashboard → Admin → Mall."
       elif echo "$body" | grep -qi "balance\|insufficient\|funds"; then
         echo "Insufficient on-chain USDC — top up the smart account wallet on Base."
+      elif echo "$body" | grep -qi "SpendPermission\|spend.permission\|authentication service unavailable\|relay.*auth\|auth.*relay"; then
+        echo "Relay rejected the request — SpendPermission may not be set up for this agent."
+        echo "Fix: AiCard Dashboard → Developer tab → grant a SpendPermission for this agent, then retry."
       else
-        echo "Gateway error (HTTP ${status}) — relay or CDP may be temporarily unavailable."
+        echo "Gateway error (HTTP ${status}) — relay or CDP may be temporarily unavailable. Retry in a minute."
+        echo "If this persists, check AiCard Dashboard → Developer tab for SpendPermission status."
       fi ;;
     *)
       echo "Recharge failed (HTTP ${status}) — check logs above for details." ;;

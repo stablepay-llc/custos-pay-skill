@@ -317,7 +317,8 @@ or a terminal banner (all platforms) and prints the reason:
 | `429` | Too many recharge attempts | `Rate limit hit — will retry next interval` | No action needed; the script retries automatically |
 | `5xx` | Insufficient on-chain USDC | `Insufficient on-chain USDC — top up the smart account wallet on Base` | Fund your agent's smart account wallet on Base |
 | `5xx` | Recharge quota fence hit | `Recharge quota fence hit — only partial credit remaining` | Check quota status in AiCard Dashboard → Admin → Mall |
-| `5xx` (other) | Gateway error | `Gateway error — relay or CDP may be temporarily unavailable` | Transient; the script retries automatically next interval |
+| `5xx` | SpendPermission missing or relay auth failure | `Relay rejected the request — SpendPermission may not be set up` | AiCard Dashboard → Developer tab → grant a SpendPermission for this agent. Body typically contains `authentication service unavailable` or `SpendPermission`. |
+| `5xx` (other) | Transient relay / CDP error | `Gateway error — relay or CDP may be temporarily unavailable. Retry in a minute.` | Transient; the script retries automatically. If it persists, check SpendPermission status in Developer tab. |
 
 **Notification behavior:** The script notifies on the first failure, then again
 every 3 consecutive failures. The counter resets silently once the balance is
