@@ -1,53 +1,68 @@
 #!/usr/bin/env bash
-# rollback.sh — restore the previous LLM provider credentials.
+# rollback.sh — restore the LLM provider to the state before configure.sh ran.
 #
 # Usage:
-#   bash scripts/rollback.sh                           # reads ~/.custos-prev-provider.json
+#   bash scripts/rollback.sh                 # reads ~/.custos-prev-provider.json
 #   bash scripts/rollback.sh <agent> <prev_base> <prev_token>
+#   bash scripts/rollback.sh <agent> "" ""   # clear — removes keys entirely
 #
-# Called by:
-#   - configure.sh on verify exit 3 (insufficient balance)
-#   - AI agents via `/custos-pay-skill rollback` slash command
-#   - Users manually after a bad configure run
+# Handles two cases correctly:
+#   prev_base non-empty → restore those credentials
+#   prev_base empty     → remove the keys from rc file and settings.json entirely
 #
 # Exit codes:
-#   0 — restored successfully
-#   2 — missing arguments and no saved state found
+#   0 — done (restored or cleared)
+#   2 — cannot determine what to roll back to
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 agent="${1:-}"
-prev_base="${2:-}"
+prev_base="${2:-__unset__}"   # sentinel so we can distinguish "empty" from "not provided"
 prev_token="${3:-}"
 
-# If no args, try reading the saved state file written by configure.sh
+# ── Load saved state if no args supplied ──────────────────────────────────────
 _prev_state_file="$HOME/.custos-prev-provider.json"
-if [ -z "$agent" ] && [ -f "$_prev_state_file" ]; then
-  agent="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('agent',''))" "$_prev_state_file" 2>/dev/null || true)"
-  prev_base="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('prev_base',''))" "$_prev_state_file" 2>/dev/null || true)"
-  prev_token="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('prev_token',''))" "$_prev_state_file" 2>/dev/null || true)"
+if [ -z "$agent" ]; then
+  if [ -f "$_prev_state_file" ]; then
+    agent="$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get('agent', ''))
+" "$_prev_state_file" 2>/dev/null || true)"
+    prev_base="$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get('prev_base', ''))
+" "$_prev_state_file" 2>/dev/null || true)"
+    prev_token="$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get('prev_token', ''))
+" "$_prev_state_file" 2>/dev/null || true)"
+  else
+    echo "No saved state found at $HOME/.custos-prev-provider.json" >&2
+    echo >&2
+    echo "Options:" >&2
+    echo "  1. Run: bash scripts/rollback.sh claude \"\" \"\"" >&2
+    echo "     (clears ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN entirely)" >&2
+    echo "  2. Run: bash scripts/rollback.sh <agent> <old_base_url> <old_token>" >&2
+    echo "     (restores specific credentials)" >&2
+    exit 2
+  fi
+else
+  # Args were provided — use them as-is (sentinel → truly empty)
+  [ "$prev_base" = "__unset__" ] && prev_base=""
 fi
 
-if [ -z "$agent" ] || [ -z "$prev_base" ] || [ -z "$prev_token" ]; then
-  echo "No previous provider state found." >&2
-  echo >&2
-  echo "Usage: bash scripts/rollback.sh <agent> <prev_base_url> <prev_token>" >&2
-  echo "  agent      : claude | gemini | openai | cursor | windsurf" >&2
-  echo "  prev_base  : previous MALL_BASE_URL value" >&2
-  echo "  prev_token : previous MALL_AUTH_TOKEN value" >&2
-  echo >&2
-  echo "Or run configure.sh again to set up a new provider — it saves the" >&2
-  echo "previous state automatically before overwriting." >&2
+if [ -z "$agent" ]; then
+  echo "Could not determine agent from saved state." >&2
   exit 2
 fi
 
-# Source the write helpers from configure.sh
-# shellcheck source=scripts/configure.sh
-. "$here/scripts/configure.sh" --source-only 2>/dev/null || true
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-# Inline the helpers we need (in case --source-only isn't supported)
 pick_rc() {
   case "${SHELL:-}" in
     *zsh*)  echo "$HOME/.zshrc" ;;
@@ -60,6 +75,36 @@ pick_rc() {
 bash_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 fish_quote()  { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/\\\\'/g")"; }
 
+# Remove the custos-pay-skill marker block from rc (writes nothing back).
+strip_env_block() {
+  local rc="$1"
+  [ -f "$rc" ] || return 0
+  local marker_begin="# >>> custos-pay-skill >>>"
+  local marker_end="# <<< custos-pay-skill <<<"
+  local tmp; tmp="$(mktemp)"
+  awk -v b="$marker_begin" -v e="$marker_end" \
+    '$0==b{skip=1;next} $0==e{skip=0;next} !skip{print}' "$rc" > "$tmp"
+  mv "$tmp" "$rc"
+}
+
+# Strip raw (un-marked) export/set lines for the given key names.
+# Handles bash `export KEY=...` and fish `set -gx KEY ...`.
+strip_raw_keys() {
+  local rc="$1"; shift
+  [ -f "$rc" ] || return 0
+  local tmp; tmp="$(mktemp)"
+  local pattern=""
+  for k in "$@"; do
+    # bash: ^export KEY= or ^export KEY =
+    # fish: ^set -gx KEY  (with optional flags)
+    pattern="${pattern}|^[[:space:]]*(export[[:space:]]+${k}[[:space:]=]|set[[:space:]].*[[:space:]]${k}[[:space:]])"
+  done
+  pattern="${pattern#|}"   # trim leading |
+  grep -Ev "$pattern" "$rc" > "$tmp" || true
+  mv "$tmp" "$rc"
+}
+
+# Write marker block with key=value pairs.
 write_env_block() {
   local rc="$1"; shift
   mkdir -p "$(dirname "$rc")"
@@ -72,7 +117,8 @@ write_env_block() {
     awk -v b="$marker_begin" -v e="$marker_end" \
       '$0==b{skip=1;next} $0==e{skip=0;next} !skip{print}' "$rc" > "$tmp"
   fi
-  { echo "$marker_begin"
+  {
+    echo "$marker_begin"
     while [ "$#" -gt 0 ]; do
       local k="$1" v="$2"; shift 2
       if [ "$is_fish" -eq 1 ]; then
@@ -86,6 +132,34 @@ write_env_block() {
   mv "$tmp" "$rc"
 }
 
+# Remove specific keys from settings.json "env" block.
+remove_json_env_keys() {
+  local target="$1"; shift
+  [ -f "$target" ] || return 0
+  python3 - "$target" "$@" <<'PY'
+import json, os, sys, tempfile
+target = sys.argv[1]
+keys_to_remove = sys.argv[2:]
+with open(target, 'r', encoding='utf-8') as f:
+    try: data = json.load(f)
+    except json.JSONDecodeError: data = {}
+env = data.get('env') or {}
+for k in keys_to_remove:
+    env.pop(k, None)
+if env:
+    data['env'] = env
+else:
+    data.pop('env', None)
+fd, tmp = tempfile.mkstemp(prefix='.custos-', dir=os.path.dirname(target) or '.')
+with os.fdopen(fd, 'w', encoding='utf-8') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+os.replace(tmp, target)
+print(f'updated {target}', file=sys.stderr)
+PY
+}
+
+# Merge key=value pairs into settings.json "env" block (for non-empty restore).
 _secret_tmpfile() {
   local tmp; tmp="$(mktemp)"; chmod 600 "$tmp"
   while [ "$#" -gt 0 ]; do
@@ -107,44 +181,85 @@ parts = [p.decode('utf-8') for p in raw.rstrip(b'\x00').split(b'\x00')]
 pairs = dict(zip(parts[0::2], parts[1::2]))
 data = {}
 if os.path.exists(target):
-    with open(target, 'r') as f:
+    with open(target, 'r', encoding='utf-8') as f:
         try: data = json.load(f)
         except: pass
 data['env'] = {**(data.get('env') or {}), **pairs}
 fd, tmp = tempfile.mkstemp(prefix='.custos-', dir=os.path.dirname(target) or '.')
-with os.fdopen(fd, 'w') as f:
+with os.fdopen(fd, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False); f.write('\n')
 os.replace(tmp, target)
+print(f'merged env into {target}', file=sys.stderr)
 PY
 }
 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 rc="$(pick_rc)"
 
-echo "Rolling back to previous provider..." >&2
+echo "Rolling back agent=$agent ..." >&2
 
-case "$agent" in
-  claude)
-    write_env_block "$rc" \
-      "ANTHROPIC_BASE_URL"   "$prev_base" \
-      "ANTHROPIC_AUTH_TOKEN" "$prev_token"
-    merge_json_env "$HOME/.claude/settings.json" \
-      "ANTHROPIC_BASE_URL"   "$prev_base" \
-      "ANTHROPIC_AUTH_TOKEN" "$prev_token"
-    ;;
-  gemini)
-    write_env_block "$rc" \
-      "GOOGLE_GEMINI_BASE_URL" "$prev_base" \
-      "GEMINI_API_KEY"         "$prev_token"
-    ;;
-  openai|cursor|windsurf)
-    write_env_block "$rc" \
-      "OPENAI_BASE_URL" "$prev_base" \
-      "OPENAI_API_KEY"  "$prev_token"
-    ;;
-  *)
-    echo "Unknown agent: $agent" >&2; exit 2 ;;
-esac
+if [ -z "$prev_base" ]; then
+  # ── Clear mode: no previous provider — remove the keys entirely ──────────────
+  echo "No previous provider detected — removing Custos gateway config." >&2
 
-echo "Rolled back to: ${prev_base}" >&2
-echo "Run: source ${rc}   (to apply in current shell)" >&2
-echo "Top up your Custos balance at: AiCard Dashboard → Mall tab → Recharge" >&2
+  case "$agent" in
+    claude)
+      strip_env_block "$rc"
+      strip_raw_keys  "$rc" ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+      remove_json_env_keys "$HOME/.claude/settings.json" \
+        ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+      ;;
+    gemini)
+      strip_env_block "$rc"
+      strip_raw_keys  "$rc" GOOGLE_GEMINI_BASE_URL GEMINI_API_KEY
+      ;;
+    openai|cursor|windsurf)
+      strip_env_block "$rc"
+      strip_raw_keys  "$rc" OPENAI_BASE_URL OPENAI_API_KEY
+      ;;
+    *)
+      echo "Unknown agent: $agent" >&2; exit 2 ;;
+  esac
+
+  echo >&2
+  echo "Custos gateway config removed." >&2
+  echo "Claude Code will now use the default Anthropic API directly." >&2
+
+else
+  # ── Restore mode: write back the previous credentials ───────────────────────
+  echo "Restoring previous provider: $prev_base" >&2
+
+  case "$agent" in
+    claude)
+      strip_raw_keys "$rc" ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+      write_env_block "$rc" \
+        "ANTHROPIC_BASE_URL"   "$prev_base" \
+        "ANTHROPIC_AUTH_TOKEN" "$prev_token"
+      merge_json_env "$HOME/.claude/settings.json" \
+        "ANTHROPIC_BASE_URL"   "$prev_base" \
+        "ANTHROPIC_AUTH_TOKEN" "$prev_token"
+      ;;
+    gemini)
+      strip_raw_keys "$rc" GOOGLE_GEMINI_BASE_URL GEMINI_API_KEY
+      write_env_block "$rc" \
+        "GOOGLE_GEMINI_BASE_URL" "$prev_base" \
+        "GEMINI_API_KEY"         "$prev_token"
+      ;;
+    openai|cursor|windsurf)
+      strip_raw_keys "$rc" OPENAI_BASE_URL OPENAI_API_KEY
+      write_env_block "$rc" \
+        "OPENAI_BASE_URL" "$prev_base" \
+        "OPENAI_API_KEY"  "$prev_token"
+      ;;
+    *)
+      echo "Unknown agent: $agent" >&2; exit 2 ;;
+  esac
+
+  echo >&2
+  echo "Restored to: $prev_base" >&2
+fi
+
+echo "Run: source $rc   (to apply in the current shell)" >&2
+echo >&2
+echo "To top up your Custos balance: AiCard Dashboard → Mall tab → Recharge" >&2

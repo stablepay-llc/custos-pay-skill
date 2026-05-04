@@ -70,12 +70,17 @@ dispatch to the matching flow below and **do not run Steps 0–5**.
 1. Run `bash scripts/rollback.sh` (no arguments). It reads the saved state
    from `~/.custos-prev-provider.json`, written by configure.sh before every
    overwrite.
+   - If `prev_base` was non-empty → restores old credentials to rc file +
+     settings.json, stripping any duplicate raw lines first.
+   - If `prev_base` was empty (user had no override before) → removes
+     `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` from the rc file and
+     `~/.claude/settings.json` entirely (both marked block and raw lines).
 2. Exit 0 → tell the user:
    > "Previous provider restored. Run `source ~/.zshrc` to apply in the
    > current terminal."
-3. Exit 2 (no saved state) → tell the user:
-   > "No previous provider saved. Run configure.sh again to set up a new
-   > provider — it saves the current one automatically before overwriting."
+3. Exit 2 (no saved state, no args) → tell the user:
+   > "No saved state found. To clear the Custos gateway config entirely, run:
+   > `bash scripts/rollback.sh claude "" ""`"
 
 ---
 
