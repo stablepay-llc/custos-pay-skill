@@ -66,10 +66,19 @@ Run the configure script, or ask the agent to do it:
 bash scripts/configure.sh
 ```
 
-You will be prompted for:
+**Step 1–4: LLM routing** — you will be prompted for:
 
 - `MALL_BASE_URL` — your Custos Pay gateway URL (e.g. `https://api.credo.aicard.credit`)
-- `MALL_AUTH_TOKEN` — your gateway token
+- `MALL_AUTH_TOKEN` — your gateway token (the `sk-…` LLM service key)
+
+**Step 5: Balance monitoring + auto-recharge** — you will be prompted for:
+
+- `CUSTOS_BASE_URL` — the AiCard platform URL (e.g. `https://aicard.credit`)
+- `CUSTOS_API_KEY` — your agent's Custos API key
+- `CUSTOS_SECRET_KEY` — your agent's Custos secret key
+
+All five values are available via the **"Copy All"** button in the
+**Skill Setup** modal: AiCard dashboard → Mall tab → Skill button → Skill includes.
 
 The script writes the right env vars / config file for the detected agent.
 You can start using the agent immediately — no terminal restart needed.
@@ -82,6 +91,26 @@ bash scripts/verify.sh
 
 Performs one round-trip against the configured gateway and reports HTTP
 status. The token is never echoed.
+
+## Balance check
+
+```bash
+bash scripts/check-balance.sh
+```
+
+Authenticates with your Custos credentials (HMAC-signed token exchange) and
+prints the current mall credit balance.
+
+## Auto-recharge
+
+```bash
+bash scripts/auto-recharge.sh [threshold] [interval_seconds]
+# e.g.: bash scripts/auto-recharge.sh 0.5 300 &
+```
+
+Monitors your balance every `interval_seconds` (default 300) and automatically
+triggers a recharge whenever it drops below `threshold` credits (default 0.5).
+Run in the background with `&`; stop with `kill %1` or `kill <PID>`.
 
 ## Supported hosts
 

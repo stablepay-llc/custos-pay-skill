@@ -37,6 +37,7 @@ description: |
 >      one as the default; user just confirms or picks another).
 >   2. **`MALL_BASE_URL`** — the gateway URL (e.g. `https://api.credo.aicard.credit`).
 >   3. **`MALL_AUTH_TOKEN`** — the gateway token.
+>   4. *(Step 5)* **`CUSTOS_BASE_URL`**, **`CUSTOS_API_KEY`**, **`CUSTOS_SECRET_KEY`** — for balance monitoring and auto-recharge.
 >
 > Everything else (file paths, write targets, merging logic, gitignore
 > updates) you resolve yourself without asking.
@@ -234,26 +235,32 @@ can query its own mall balance and automatically top up when it runs low.
 
 #### 5.1 Ask the user for Custos credentials
 
-Ask **exactly these three values**:
+Ask **exactly these three values** (all available via the **"Copy All"** button in
+the Skill Setup modal on the AiCard Mall tab → Skill button → Skill includes):
 
-1. `CUSTOS_URL`      — the Custos platform base URL (e.g. `https://aicard.credit`)
-2. `CUSTOS_API_KEY`  — the agent's Custos API key
-3. `CUSTOS_AGENT_ID` — the agent's ID (from the AiCard dashboard)
+1. `CUSTOS_BASE_URL`   — the Custos platform base URL (e.g. `https://aicard.credit`)
+2. `CUSTOS_API_KEY`    — the agent's Custos API key
+3. `CUSTOS_SECRET_KEY` — the agent's Custos secret key (used for HMAC-signed auth)
 
-Do not validate format beyond "non-empty". The user can find all three in the
-**Skill Setup Guide** modal on the AiCard Mall tab.
+Do not validate format beyond "non-empty".
 
 #### 5.2 Write the three env vars alongside the existing ones
 
 Add to the same rc file / settings file that was written in Step 3:
 
 ```bash
-export CUSTOS_URL="<user_CUSTOS_URL>"
+export CUSTOS_BASE_URL="<user_CUSTOS_BASE_URL>"
 export CUSTOS_API_KEY="<user_CUSTOS_API_KEY>"
-export CUSTOS_AGENT_ID="<user_CUSTOS_AGENT_ID>"
+export CUSTOS_SECRET_KEY="<user_CUSTOS_SECRET_KEY>"
 ```
 
 Mask all tokens to `****` + last 4 chars in the diff preview.
+
+> **How auth works**: the scripts sign `"v1:<timestamp>:<apiKey>"` with
+> `CUSTOS_SECRET_KEY` (HMAC-SHA256), exchange the signature for a short-lived
+> Bearer token at `POST /api/v1/auth/token`, then use that token for balance
+> checks and recharge calls. The agent ID is decoded from the token payload
+> automatically — the user never needs to supply it.
 
 #### 5.3 Ask the user for the auto-recharge threshold
 
@@ -284,7 +291,7 @@ Tell the user (one short sentence): "Auto-recharge is active — your balance wi
 be topped up automatically when it drops below `<threshold>` credits."
 
 If the balance check fails, print the error and tell the user to verify
-`CUSTOS_URL` and `CUSTOS_API_KEY`.
+`CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and `CUSTOS_SECRET_KEY`.
 
 ---
 
