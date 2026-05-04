@@ -7,15 +7,17 @@ description: |
   flow: (1) ask the user which platform to configure using these FOUR grouped
   options — (a) Claude (Code / Desktop), (b) Gemini (CLI / Code Assist),
   (c) OpenAI / Codex / OpenAI-compatible, (d) Cursor / Windsurf — pre-selecting
-  the detected host as the default; (2) prompt the user for `MALL_BASE_URL`
-  and `MALL_AUTH_TOKEN`; (3) write the platform-correct env vars / settings
-  file (e.g. append to `~/.zshrc` or merge into `~/.claude/settings.json`);
-  (4) verify and report; (5) ask for `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and
-  `CUSTOS_SECRET_KEY` to enable balance monitoring and auto-recharge, then run
-  a balance check and start the auto-recharge daemon. Do NOT present a "what
-  do you want to do" menu — the only questions the Agent asks are: target
-  platform, MALL_BASE_URL, MALL_AUTH_TOKEN, CUSTOS_BASE_URL, CUSTOS_API_KEY,
-  CUSTOS_SECRET_KEY, and the auto-recharge threshold.
+  the detected host as the default; (2) ask the user to paste a single
+  KEY=VALUE config block (recognized keys: MALL_BASE_URL, MALL_AUTH_TOKEN, plus
+  optional CUSTOS_BASE_URL, CUSTOS_API_KEY, CUSTOS_SECRET_KEY, RECHARGE_THRESHOLD)
+  — do NOT prompt for these values one at a time; (3) show one masked preview,
+  confirm, then write the platform-correct env vars / settings file (e.g.
+  append to `~/.zshrc` or merge into `~/.claude/settings.json`); (4) verify
+  in two parts — run `verify.sh` for LLM routing AND, if Custos credentials
+  were supplied, run `check-balance.sh` to query and PRINT the actual balance
+  to the user; (5) auto-start the recharge daemon when balance check passed.
+  Do NOT present a "what do you want to do" menu — the only user-facing
+  prompts are the target platform and the single config-block paste.
 ---
 
 # Custos Pay — Agent Connector Skill
@@ -38,9 +40,10 @@ description: |
 > The only questions you may ask are, in order:
 >   1. **Target platform** — which host to configure (pre-select the detected
 >      one as the default; user just confirms or picks another).
->   2. **`MALL_BASE_URL`** — the gateway URL (e.g. `https://api.credo.aicard.credit`).
->   3. **`MALL_AUTH_TOKEN`** — the gateway token.
->   4. *(Step 5)* **`CUSTOS_BASE_URL`**, **`CUSTOS_API_KEY`**, **`CUSTOS_SECRET_KEY`** — for balance monitoring and auto-recharge.
+>   2. **Single config-block paste** — ONE multi-line prompt that collects
+>      everything: `MALL_BASE_URL`, `MALL_AUTH_TOKEN`, plus optional
+>      `CUSTOS_BASE_URL` / `CUSTOS_API_KEY` / `CUSTOS_SECRET_KEY` (and
+>      optional `RECHARGE_THRESHOLD`). Do **not** ask key-by-key.
 >
 > Everything else (file paths, write targets, merging logic, gitignore
 > updates) you resolve yourself without asking.
@@ -124,14 +127,50 @@ Detection helpers (used to pre-select the default, not to bypass asking):
   `~/.codex/config.toml`, `~/.cursor/`, `~/.codeium/windsurf/`.
 - Process / CLI name — `claude`, `gemini`, `codex`, `cursor-agent`, `windsurf`.
 
-### Step 2 — Prompt for the two required values
+### Step 2 — Ask the user to paste the full config block (one prompt)
 
-Ask the user **exactly these two questions**, nothing else:
+Ask **exactly one** question — present the user with a multi-line paste prompt
+ending on a blank line. Use this exact phrasing:
 
-1. `MALL_BASE_URL` (e.g. `https://api.credo.aicard.credit`)
-2. `MALL_AUTH_TOKEN`
+```
+Paste your full config block below — KEY=VALUE per line.
+Recognized keys:
+  MALL_BASE_URL, MALL_AUTH_TOKEN
+  CUSTOS_BASE_URL, CUSTOS_API_KEY, CUSTOS_SECRET_KEY  (optional, enables balance + auto-recharge)
 
-Accept whatever they paste. Do not validate format beyond "non-empty".
+End the paste with a blank line.
+```
+
+The user will paste a block that looks like this (taken from the AiCard
+dashboard "Copy All" button on the Skill Setup modal):
+
+```
+MALL_BASE_URL=https://api.credo.aicard.credit
+MALL_AUTH_TOKEN=sk-...
+CUSTOS_BASE_URL=https://aicard.credit
+CUSTOS_API_KEY=ak_...
+CUSTOS_SECRET_KEY=sk_...
+```
+
+Parsing rules (be lenient):
+- Trim leading/trailing whitespace per line.
+- Skip blank lines and `#`-prefixed comments.
+- Strip a leading `export ` if present.
+- Strip surrounding single or double quotes from the value.
+- Ignore unknown keys silently.
+
+Validation:
+- `MALL_BASE_URL` and `MALL_AUTH_TOKEN` are **required** — abort with a clear
+  error if either is missing.
+- `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, `CUSTOS_SECRET_KEY` are **all-or-nothing**
+  — if any one is supplied, all three must be. Otherwise abort.
+- `RECHARGE_THRESHOLD` defaults to `0.5` if absent.
+
+Do not validate format beyond "non-empty / all-three-or-none".
+
+> ⚠️ Do **not** prompt the user separately for `MALL_BASE_URL` /
+> `MALL_AUTH_TOKEN` / any `CUSTOS_*` value. The single paste is the only
+> way these enter the script.
 
 ### Step 3 — Write configuration for the chosen platform
 
@@ -215,93 +254,99 @@ provider is registered."
 Write the provider block from `configs/windsurf.provider.json.example` into
 the Windsurf config file, substituting the two values.
 
-### Step 4 — Verify and report
+### Step 4 — Verify (LLM routing + balance) and report
 
-1. Print the env vars that were set, with the token masked to `****` + last 4
-   chars. Never print the full token.
-2. Run `bash scripts/verify.sh` if available — it round-trips
-   `${MALL_BASE_URL}/models` with the supplied token and reports HTTP status only.
-3. Tell the user (one short sentence) that the agent is now connected and they
-   can start using it immediately — e.g. "Done — your agent is connected to
-   Custos Pay. Happy hacking!". Do NOT tell the user to restart their terminal,
-   open a new shell, or reload the agent — the configuration is live as soon
-   as `~/.claude/settings.json` (or the equivalent host config) is written.
+This step has two parts. Run them in order; surface **both results** to the user.
+
+**4.1 — LLM routing.** Run `bash scripts/verify.sh` — it round-trips
+`${MALL_BASE_URL}/models` with the supplied token and reports HTTP status only.
+Exit codes:
+- `0` — 2xx, OK
+- `3` — `insufficient_balance` detected on the gateway response
+- otherwise — auth / endpoint / network failure
+
+If exit code is `3` and a previous provider was recorded (`_prev_*`), offer a
+single rollback prompt before continuing.
+
+**4.2 — Custos balance.** If the user supplied the `CUSTOS_*` keys in Step 2,
+run `bash scripts/check-balance.sh` and **print the actual balance** to the
+user (e.g. `balance: 12.34 credits`). Do not summarize this as "ok" — the
+user explicitly wants to see the number returned by the API. If the balance
+check fails, print the error and tell the user to verify the three Custos
+keys.
+
+**4.3 — Auto-recharge daemon.** When the balance check succeeds, immediately
+start the recharge monitor in the background — **no extra prompt**:
+
+```bash
+bash scripts/auto-recharge.sh "$threshold" 300 &
+```
+
+Print the PID so the user can stop it later (`kill <pid>`). The threshold
+comes from the optional `RECHARGE_THRESHOLD` key in the paste, defaulting to
+`0.5`. The daemon now also writes the latest balance into a shared cache
+file (`~/.cache/custos-pay/balance.json`, atomic mtime-stamped JSON) so the
+per-response Stop hook below can read it without an extra API call.
+
+**4.3a — Per-response balance guard (Claude only).** When the target platform
+is `claude` and the user supplied `CUSTOS_*`, register a `Stop` hook in
+`~/.claude/settings.json` pointing at
+`~/.claude/skills/custos-pay-skill/scripts/balance-guard.sh`. The hook fires
+after every assistant response, reads the shared balance cache (30 s TTL,
+falls back to a one-shot `check-balance.sh` call on miss), compares against
+`RECHARGE_THRESHOLD`, and — only when below threshold — emits a friendly
+boxed banner directly to the user's controlling TTY plus a desktop
+notification. The hook always exits 0 and never blocks Claude.
+
+**Auto-recharge from the hook.** When the banner fires, the hook also spawns
+`scripts/recharge-once.sh` in the **background** (via `nohup … &` in a
+detached subshell) so a top-up runs immediately without waiting for the
+5-minute daemon poll. The Stop hook itself returns in milliseconds — the
+recharge runs out-of-band and updates the cache, so the next assistant
+response sees the recovered balance and the banner stops appearing.
+
+`recharge-once.sh` enforces two guards:
+
+1. **Debounce** — `~/.cache/custos-pay/last-recharge.ts` records the last
+   attempt; another fire within `RECHARGE_DEBOUNCE_SECONDS` (default 60 s)
+   exits early with status 3. The Stop hook mirrors this check and shows
+   "Auto-recharge already in flight — waiting it out." instead of "fired
+   in background", so the user gets honest feedback about which path ran.
+2. **Lock** — atomic `mkdir ~/.cache/custos-pay/recharge.lock`; concurrent
+   invocations exit 4 without doing the network round-trip.
+
+The recharge log streams to `~/.cache/custos-pay/recharge.log` for post-hoc
+inspection.
+
+Idempotency: the hook entry is identified by `id: "custos-pay-skill"` so
+re-running `configure.sh` replaces the prior registration without
+duplicating it and without touching unrelated `Stop` / other-event hooks.
+
+This step is Claude-only because Gemini / OpenAI Codex / Cursor / Windsurf
+have no equivalent post-response hook contract. Other platforms still get
+the auto-recharge daemon and ad-hoc `check-balance.sh` / `recharge-once.sh`.
+
+**4.4 — Final summary.** Print a short table with: agent name, LLM routing
+status, balance value (or "not configured"), auto-recharge state. Then tell
+the user the configuration is live — do NOT tell them to restart their
+terminal or reload the agent; the moment `~/.claude/settings.json` (or the
+equivalent host config) is written, the routing is in effect.
 
 The configuration flow ends here. Do **not** offer further menu options.
 
----
-
-### Step 5 — Custos credentials + balance monitor + auto-recharge (optional but recommended)
-
-After the LLM routing is live (Steps 1–4), set up Custos credentials so the agent
-can query its own mall balance and automatically top up when it runs low.
-
-#### 5.1 Ask the user for Custos credentials
-
-Ask **exactly these three values** (all available via the **"Copy All"** button in
-the Skill Setup modal on the AiCard Mall tab → Skill button → Skill includes):
-
-1. `CUSTOS_BASE_URL`   — the Custos platform base URL (e.g. `https://aicard.credit`)
-2. `CUSTOS_API_KEY`    — the agent's Custos API key
-3. `CUSTOS_SECRET_KEY` — the agent's Custos secret key (used for HMAC-signed auth)
-
-Do not validate format beyond "non-empty".
-
-#### 5.2 Write the three env vars alongside the existing ones
-
-Add to the same rc file / settings file that was written in Step 3:
-
-```bash
-export CUSTOS_BASE_URL="<user_CUSTOS_BASE_URL>"
-export CUSTOS_API_KEY="<user_CUSTOS_API_KEY>"
-export CUSTOS_SECRET_KEY="<user_CUSTOS_SECRET_KEY>"
-```
-
-Mask all tokens to `****` + last 4 chars in the diff preview.
-
-> **How auth works**: the scripts sign `"v1:<timestamp>:<apiKey>"` with
+> **How Custos auth works**: the scripts sign `"v1:<timestamp>:<apiKey>"` with
 > `CUSTOS_SECRET_KEY` (HMAC-SHA256), exchange the signature for a short-lived
 > Bearer token at `POST /api/v1/auth/token`, then use that token for balance
 > checks and recharge calls. The agent ID is decoded from the token payload
 > automatically — the user never needs to supply it.
 
-#### 5.3 Ask the user for the auto-recharge threshold
-
-Ask one question:
-
-> What balance threshold (in credits) should trigger an auto-recharge?
-> *(e.g. `0.5` — when your mall balance drops below this, the agent will
->  automatically top up by calling the Custos recharge API.)*
-
-Default: `0.5`. Accept any positive decimal.
-
-#### 5.4 Run the balance check and offer to set up auto-recharge
-
-After writing the vars, run the balance check script once to confirm connectivity:
-
-```bash
-bash scripts/check-balance.sh
-```
-
-If it succeeds, tell the user the current balance and offer to set up automatic
-recharging by starting the monitor in the background:
-
-```bash
-bash scripts/auto-recharge.sh <threshold> &
-```
-
-Tell the user (one short sentence): "Auto-recharge is active — your balance will
-be topped up automatically when it drops below `<threshold>` credits."
-
-If the balance check fails, print the error and tell the user to verify
-`CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and `CUSTOS_SECRET_KEY`.
-
 ---
 
 ## Helper: the configure script
 
-If you prefer to delegate the whole flow to a script (the script itself
-prompts for the two values and writes the right files):
+If you prefer to delegate the whole flow to a script (the script itself runs
+the platform picker, the single config-block paste, the writes, the
+verification, and starts the auto-recharge daemon):
 
 ```bash
 bash scripts/configure.sh
@@ -319,13 +364,19 @@ path when running in a non-interactive shell.
   the user wants Step 0 → Step 4 executed.
 - The Step 1 platform list is **not** a "what do you want to do" menu — it
   is the platform picker, and it is required.
-- **Never** invent a `MALL_BASE_URL` or `MALL_AUTH_TOKEN`. Always prompt.
+- **Never** invent or hardcode any `MALL_*` or `CUSTOS_*` value. Always read
+  them from the user's pasted block.
+- **Never** prompt for `MALL_BASE_URL` / `MALL_AUTH_TOKEN` / `CUSTOS_*`
+  separately — they all enter the script via the single Step-2 paste.
 - **Never** echo the full token. Mask to `****` + last 4 chars.
 - **Never** commit `.env`, `settings.local.json`, or any file with a real
   token. If in a git repo, add the path to `.gitignore` before writing.
 - **Never** ask "do you want me to proceed" between Steps 0, 3, 4. Only
-  Steps 1 (platform pick) and 2 (MALL_BASE_URL, MALL_AUTH_TOKEN) are user-facing
-  questions.
+  Step 1 (platform pick) and Step 2 (config-block paste) plus the single
+  "Write?" preview-confirmation are user-facing.
+- The verification step **must** print the actual Custos balance when
+  Custos credentials were supplied. Don't summarize it as "ok" — show the
+  number.
 - Self-install is idempotent: if the skill folder already exists at the
   target, skip the copy and continue.
 
@@ -353,5 +404,10 @@ custos-pay-skill/
     ├── configure.sh       # run the full Steps 1–4 flow non-interactively
     ├── verify.sh          # round-trip check; never echoes the token
     ├── check-balance.sh   # query current mall balance via Custos API
-    └── auto-recharge.sh   # monitor balance; auto-recharge when below threshold
+    ├── auto-recharge.sh   # monitor balance; auto-recharge when below threshold;
+    │                      #   also writes ~/.cache/custos-pay/balance.json
+    ├── recharge-once.sh   # single-shot recharge with 60s debounce + lock;
+    │                      #   refreshes balance cache on success
+    └── balance-guard.sh   # Claude Stop hook: warn when balance < threshold
+                           #   AND fire recharge-once.sh in the background
 ```

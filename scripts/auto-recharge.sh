@@ -42,6 +42,23 @@ b64decode() {
   printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null
 }
 
+# ── Shared balance cache ─────────────────────────────────────────────────────
+# The Stop hook (scripts/balance-guard.sh) reads from this same file so the
+# hook can usually run without a network round-trip. Atomic write avoids a
+# torn read when the hook fires while we are mid-update.
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/custos-pay"
+CACHE_FILE="$CACHE_DIR/balance.json"
+
+write_balance_cache() {
+  local value="$1" tmp
+  [ -z "$value" ] && return 0
+  case "$value" in ERR|err|"") return 0 ;; esac
+  mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+  tmp="$(mktemp "$CACHE_DIR/.balance.XXXXXX" 2>/dev/null)" || return 0
+  printf '{"balance":%s,"checkedAt":%s}\n' "$value" "$(date +%s)" > "$tmp"
+  mv -f "$tmp" "$CACHE_FILE" 2>/dev/null || rm -f "$tmp"
+}
+
 # ── Notification helpers ──────────────────────────────────────────────────────
 
 # notify <title> <body>
@@ -171,7 +188,7 @@ ensure_token() {
 
 get_balance() {
   ensure_token || { echo "ERR"; return; }
-  local resp body status
+  local resp body status value
   resp=$(
     curl -sS -w '\n__STATUS__%{http_code}' \
       "${base}/api/mall/balance?agentId=${AGENT_ID}" 2>/dev/null
@@ -183,10 +200,13 @@ get_balance() {
     return
   fi
   if command -v jq >/dev/null 2>&1; then
-    echo "$body" | jq -r '.balance // "ERR"'
+    value=$(echo "$body" | jq -r '.balance // "ERR"')
   else
-    echo "$body" | grep -oE '"balance"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' | grep -oE '[0-9]+(\.[0-9]+)?' || echo "ERR"
+    value=$(echo "$body" | grep -oE '"balance"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' | grep -oE '[0-9]+(\.[0-9]+)?' || echo "ERR")
   fi
+  # Populate the shared cache so the Stop hook does not need to re-query.
+  write_balance_cache "$value"
+  printf '%s\n' "$value"
 }
 
 do_recharge() {

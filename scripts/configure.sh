@@ -158,6 +158,59 @@ print(f'merged env into {target}', file=sys.stderr)
 PY
 }
 
+# merge_claude_stop_hook TARGET HOOK_COMMAND
+# Idempotently registers a Stop hook in TARGET (~/.claude/settings.json).
+# Replaces any prior custos-pay-skill hook entry, leaves all other hooks
+# alone. The hook is identified by a stable id ("custos-pay-skill") so the
+# update is safe to run repeatedly.
+merge_claude_stop_hook() {
+  local target="$1" cmd="$2"
+  mkdir -p "$(dirname "$target")"
+  HOOK_CMD="$cmd" python3 - "$target" <<'PY'
+import json, os, sys, tempfile
+target = sys.argv[1]
+cmd = os.environ['HOOK_CMD']
+hook_id = 'custos-pay-skill'
+
+data = {}
+if os.path.exists(target):
+    with open(target, 'r', encoding='utf-8') as f:
+        try: data = json.load(f)
+        except json.JSONDecodeError: pass
+
+hooks = data.get('hooks') or {}
+stop_groups = hooks.get('Stop') or []
+
+# Drop any prior group that holds our hook id, keep everything else.
+def is_ours(group):
+    inner = (group or {}).get('hooks') or []
+    for h in inner:
+        if (h or {}).get('id') == hook_id:
+            return True
+    return False
+filtered = [g for g in stop_groups if not is_ours(g)]
+
+filtered.append({
+    'matcher': '',
+    'hooks': [{
+        'id': hook_id,
+        'type': 'command',
+        'command': cmd,
+    }],
+})
+
+hooks['Stop'] = filtered
+data['hooks'] = hooks
+
+fd, tmp = tempfile.mkstemp(prefix='.custos-', dir=os.path.dirname(target) or '.')
+with os.fdopen(fd, 'w', encoding='utf-8') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+os.replace(tmp, target)
+print(f'registered Stop hook in {target}', file=sys.stderr)
+PY
+}
+
 # merge_gemini_settings TARGET ENDPOINT APIKEY
 merge_gemini_settings() {
   local target="$1"
@@ -343,6 +396,66 @@ pick_platform() {
   esac
 }
 
+# ── Config block parser ──────────────────────────────────────────────────────
+# read_config_block — prompt for a multi-line KEY=VALUE block from stdin
+# (terminated by a blank line) and populate these globals:
+#   _cfg_mall_base, _cfg_mall_token,
+#   _cfg_custos_base, _cfg_custos_api, _cfg_custos_secret,
+#   _cfg_threshold
+# Tolerates: surrounding whitespace, `# comments`, leading `export `,
+# values wrapped in single or double quotes. Unknown keys are ignored
+# silently. The raw paste is captured into a chmod-600 temp file so secrets
+# never appear in argv; the file is deleted as soon as parsing finishes.
+read_config_block() {
+  local raw_tmp line key value
+  raw_tmp="$(mktemp)"; chmod 600 "$raw_tmp"
+
+  cat >&2 <<'EOF'
+Paste your full config block below — KEY=VALUE per line.
+Recognized keys:
+  MALL_BASE_URL, MALL_AUTH_TOKEN
+  CUSTOS_BASE_URL, CUSTOS_API_KEY, CUSTOS_SECRET_KEY  (optional, enables balance + auto-recharge)
+
+End the paste with a blank line (just press Enter once on an empty line).
+
+EOF
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    # blank line ends input
+    [ -z "$line" ] && break
+    printf '%s\n' "$line" >> "$raw_tmp"
+  done
+
+  _cfg_mall_base=""; _cfg_mall_token=""
+  _cfg_custos_base=""; _cfg_custos_api=""; _cfg_custos_secret=""
+  _cfg_threshold=""
+
+  while IFS= read -r line; do
+    # trim leading/trailing whitespace
+    line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [ -z "$line" ] && continue
+    case "$line" in '#'*) continue ;; esac
+    line="${line#export }"
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    # strip wrapping quotes
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}" ;;
+      \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+    case "$key" in
+      MALL_BASE_URL)      _cfg_mall_base="$value" ;;
+      MALL_AUTH_TOKEN)    _cfg_mall_token="$value" ;;
+      CUSTOS_BASE_URL)    _cfg_custos_base="$value" ;;
+      CUSTOS_API_KEY)     _cfg_custos_api="$value" ;;
+      CUSTOS_SECRET_KEY)  _cfg_custos_secret="$value" ;;
+      RECHARGE_THRESHOLD) _cfg_threshold="$value" ;;
+    esac
+  done < "$raw_tmp"
+  rm -f "$raw_tmp"
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 agent="${1:-}"
@@ -362,12 +475,29 @@ echo >&2
 echo "Target platform: $agent" >&2
 echo >&2
 
-base="$(prompt_value "MALL_BASE_URL (e.g. https://api.credo.aicard.credit)")"
-token="$(prompt_value "MALL_AUTH_TOKEN" "yes")"
+read_config_block
+
+base="$_cfg_mall_base"
+token="$_cfg_mall_token"
+custos_base="$_cfg_custos_base"
+custos_api_key="$_cfg_custos_api"
+custos_secret_key="$_cfg_custos_secret"
+threshold="${_cfg_threshold:-0.5}"
 
 if [ -z "$base" ] || [ -z "$token" ]; then
-  echo "MALL_BASE_URL and MALL_AUTH_TOKEN are both required." >&2
+  echo "MALL_BASE_URL and MALL_AUTH_TOKEN are both required in the paste." >&2
   exit 2
+fi
+
+# CUSTOS_* values are all-or-nothing — partial config is rejected.
+custos_set=0
+if [ -n "$custos_base" ] || [ -n "$custos_api_key" ] || [ -n "$custos_secret_key" ]; then
+  if [ -z "$custos_base" ] || [ -z "$custos_api_key" ] || [ -z "$custos_secret_key" ]; then
+    echo "Partial Custos credentials detected." >&2
+    echo "Provide all three (CUSTOS_BASE_URL, CUSTOS_API_KEY, CUSTOS_SECRET_KEY) or none." >&2
+    exit 2
+  fi
+  custos_set=1
 fi
 
 masked="$(mask "$token")"
@@ -375,16 +505,25 @@ rc="$(pick_rc)"
 
 echo >&2
 echo "About to configure:" >&2
-printf '  %-18s: %s\n' "agent"           "$agent"   >&2
-printf '  %-18s: %s\n' "MALL_BASE_URL"   "$base"    >&2
-printf '  %-18s: %s\n' "MALL_AUTH_TOKEN" "$masked"  >&2
+printf '  %-20s: %s\n' "agent"           "$agent"   >&2
+printf '  %-20s: %s\n' "MALL_BASE_URL"   "$base"    >&2
+printf '  %-20s: %s\n' "MALL_AUTH_TOKEN" "$masked"  >&2
+if [ "$custos_set" -eq 1 ]; then
+  printf '  %-20s: %s\n' "CUSTOS_BASE_URL"   "$custos_base"                  >&2
+  printf '  %-20s: %s\n' "CUSTOS_API_KEY"    "$(mask "$custos_api_key")"     >&2
+  printf '  %-20s: %s\n' "CUSTOS_SECRET_KEY" "$(mask "$custos_secret_key")"  >&2
+  printf '  %-20s: %s credits\n' "RECHARGE_THRESHOLD" "$threshold"           >&2
+fi
 case "$agent" in
-  claude)   printf '  %-18s: %s  +  %s\n' "writes" "$rc" "$HOME/.claude/settings.json" >&2 ;;
-  gemini)   printf '  %-18s: %s  +  %s\n' "writes" "$rc" "$HOME/.gemini/settings.json" >&2 ;;
-  openai)   printf '  %-18s: %s  +  %s\n' "writes" "$rc" "$HOME/.codex/config.toml"   >&2 ;;
-  cursor)   printf '  %-18s: %s\n' "writes" "$HOME/.cursor/mcp.json"                  >&2 ;;
-  windsurf) printf '  %-18s: %s\n' "writes" "$HOME/.codeium/windsurf/custos-pay-provider.json" >&2 ;;
+  claude)   printf '  %-20s: %s  +  %s\n' "writes" "$rc" "$HOME/.claude/settings.json" >&2 ;;
+  gemini)   printf '  %-20s: %s  +  %s\n' "writes" "$rc" "$HOME/.gemini/settings.json" >&2 ;;
+  openai)   printf '  %-20s: %s  +  %s\n' "writes" "$rc" "$HOME/.codex/config.toml"   >&2 ;;
+  cursor)   printf '  %-20s: %s\n' "writes" "$HOME/.cursor/mcp.json"                  >&2 ;;
+  windsurf) printf '  %-20s: %s\n' "writes" "$HOME/.codeium/windsurf/custos-pay-provider.json" >&2 ;;
 esac
+if [ "$agent" = "claude" ] && [ "$custos_set" -eq 1 ]; then
+  printf '  %-20s: %s\n' "Stop hook" "balance-guard.sh (warns when balance < threshold)" >&2
+fi
 echo >&2
 confirm "Write?" || { echo "aborted"; exit 1; }
 
@@ -436,27 +575,71 @@ _rollback() {
 
 case "$agent" in
   claude)
-    write_env_block "$rc" \
-      "ANTHROPIC_BASE_URL"   "$base" \
-      "ANTHROPIC_AUTH_TOKEN" "$token"
-    merge_json_env "$HOME/.claude/settings.json" \
-      "ANTHROPIC_BASE_URL"   "$base" \
-      "ANTHROPIC_AUTH_TOKEN" "$token"
+    if [ "$custos_set" -eq 1 ]; then
+      write_env_block "$rc" \
+        "ANTHROPIC_BASE_URL"   "$base"               \
+        "ANTHROPIC_AUTH_TOKEN" "$token"              \
+        "CUSTOS_BASE_URL"      "$custos_base"        \
+        "CUSTOS_API_KEY"       "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY"    "$custos_secret_key"
+      merge_json_env "$HOME/.claude/settings.json" \
+        "ANTHROPIC_BASE_URL"   "$base"               \
+        "ANTHROPIC_AUTH_TOKEN" "$token"              \
+        "CUSTOS_BASE_URL"      "$custos_base"        \
+        "CUSTOS_API_KEY"       "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY"    "$custos_secret_key"
+      # Register the per-response balance-guard hook. The skill is installed
+      # at ~/.claude/skills/custos-pay-skill/ by self-install.sh; reference
+      # the absolute path so the hook works regardless of cwd.
+      merge_claude_stop_hook "$HOME/.claude/settings.json" \
+        "bash $HOME/.claude/skills/custos-pay-skill/scripts/balance-guard.sh"
+    else
+      write_env_block "$rc" \
+        "ANTHROPIC_BASE_URL"   "$base" \
+        "ANTHROPIC_AUTH_TOKEN" "$token"
+      merge_json_env "$HOME/.claude/settings.json" \
+        "ANTHROPIC_BASE_URL"   "$base" \
+        "ANTHROPIC_AUTH_TOKEN" "$token"
+    fi
     ;;
   gemini)
-    write_env_block "$rc" \
-      "GOOGLE_GEMINI_BASE_URL" "$base" \
-      "GEMINI_API_KEY"         "$token"
+    if [ "$custos_set" -eq 1 ]; then
+      write_env_block "$rc" \
+        "GOOGLE_GEMINI_BASE_URL" "$base"               \
+        "GEMINI_API_KEY"         "$token"              \
+        "CUSTOS_BASE_URL"        "$custos_base"        \
+        "CUSTOS_API_KEY"         "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY"      "$custos_secret_key"
+    else
+      write_env_block "$rc" \
+        "GOOGLE_GEMINI_BASE_URL" "$base" \
+        "GEMINI_API_KEY"         "$token"
+    fi
     merge_gemini_settings "$HOME/.gemini/settings.json" "$base" "$token"
     ;;
   openai)
-    write_env_block "$rc" \
-      "OPENAI_BASE_URL" "$base" \
-      "OPENAI_API_KEY"  "$token"
+    if [ "$custos_set" -eq 1 ]; then
+      write_env_block "$rc" \
+        "OPENAI_BASE_URL"   "$base"               \
+        "OPENAI_API_KEY"    "$token"              \
+        "CUSTOS_BASE_URL"   "$custos_base"        \
+        "CUSTOS_API_KEY"    "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY" "$custos_secret_key"
+    else
+      write_env_block "$rc" \
+        "OPENAI_BASE_URL" "$base" \
+        "OPENAI_API_KEY"  "$token"
+    fi
     upsert_codex_provider "$HOME/.codex/config.toml" "$base"
     ;;
   cursor)
     write_cursor_mcp "$base" "$token"
+    if [ "$custos_set" -eq 1 ]; then
+      write_env_block "$rc" \
+        "CUSTOS_BASE_URL"   "$custos_base"        \
+        "CUSTOS_API_KEY"    "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY" "$custos_secret_key"
+    fi
     cat >&2 <<'EOF'
 
 Cursor written. To activate:
@@ -466,6 +649,12 @@ EOF
     ;;
   windsurf)
     write_windsurf_provider "$base" "$token"
+    if [ "$custos_set" -eq 1 ]; then
+      write_env_block "$rc" \
+        "CUSTOS_BASE_URL"   "$custos_base"        \
+        "CUSTOS_API_KEY"    "$custos_api_key"     \
+        "CUSTOS_SECRET_KEY" "$custos_secret_key"
+    fi
     cat >&2 <<'EOF'
 
 Windsurf written. To activate:
@@ -476,17 +665,42 @@ EOF
     ;;
 esac
 
-# ── Step 4: Verify ────────────────────────────────────────────────────────────
+# ── Verification: LLM routing + balance (single combined block) ──────────────
 echo >&2
-echo "Verifying LLM routing..." >&2
+echo "──────────────────────────────────────────────────────────────────────" >&2
+echo " Verification" >&2
+echo "──────────────────────────────────────────────────────────────────────" >&2
+echo >&2
+
+# 1) LLM routing — output flows directly into this block.
 verify_exit=0
 bash "$here/scripts/verify.sh" "$agent" 2>&1 || verify_exit=$?
 
-if [ "$verify_exit" -eq 0 ]; then
+# 2) Custos balance — runs immediately after, results land in the same block.
+balance_ok=0
+balance_value=""
+balance_failed_output=""
+if [ "$custos_set" -eq 1 ]; then
   echo >&2
-elif [ "$verify_exit" -eq 3 ]; then
-  # Insufficient balance
-  echo >&2
+  if balance_output=$(
+    CUSTOS_BASE_URL="$custos_base" \
+    CUSTOS_API_KEY="$custos_api_key" \
+    CUSTOS_SECRET_KEY="$custos_secret_key" \
+    bash "$here/scripts/check-balance.sh" 2>&1
+  ); then
+    printf '%s\n' "$balance_output" >&2
+    balance_value=$(printf '%s' "$balance_output" | awk -F': *' '/^balance:/ { print $2; exit }')
+    balance_ok=1
+  else
+    balance_failed_output="$balance_output"
+    printf '%s\n' "$balance_output" >&2
+  fi
+fi
+echo >&2
+
+# 3) After-the-fact handlers for verify failures (rollback / hint), printed
+#    below the combined verification block so the user sees results first.
+if [ "$verify_exit" -eq 3 ]; then
   cat >&2 <<'MSG'
 ┌──────────────────────────────────────────────────────────────┐
 │  ⚠  Insufficient balance on the new gateway                  │
@@ -511,94 +725,20 @@ MSG
     echo "Top up your balance then re-verify: bash scripts/verify.sh $agent" >&2
   fi
   echo >&2
-else
-  echo >&2
+elif [ "$verify_exit" -ne 0 ]; then
   echo "⚠  Verify returned a non-2xx status — check MALL_BASE_URL and MALL_AUTH_TOKEN." >&2
   echo "   (Config was written; you can re-run verify.sh after fixing the values.)" >&2
   echo >&2
 fi
 
-# ── Step 5: Custos credentials + balance monitor ──────────────────────────────
-echo "──────────────────────────────────────────────────────────────────────" >&2
-echo "Step 5 — Balance monitoring + auto-recharge (optional but recommended)" >&2
-echo "──────────────────────────────────────────────────────────────────────" >&2
-echo >&2
-echo "All five values are available via the \"Copy All\" button in the Skill" >&2
-echo "Setup modal: AiCard dashboard → Mall tab → Skill button → Skill includes." >&2
-echo >&2
-
-custos_base="$(prompt_value 'CUSTOS_BASE_URL (e.g. https://aicard.credit, or press Enter to skip)')"
-
-if [ -z "$custos_base" ]; then
+if [ "$custos_set" -eq 1 ] && [ "$balance_ok" -eq 0 ]; then
+  echo "⚠  Balance check failed. Verify CUSTOS_BASE_URL / CUSTOS_API_KEY / CUSTOS_SECRET_KEY." >&2
+  echo "   Run manually: bash $here/scripts/check-balance.sh" >&2
   echo >&2
-  echo "Skipped Custos setup. Run this script again to add it later." >&2
-  echo "(Verify LLM routing anytime with: bash $here/scripts/verify.sh $agent)" >&2
-  exit 0
 fi
 
-custos_api_key="$(prompt_value 'CUSTOS_API_KEY')"
-custos_secret_key="$(prompt_value 'CUSTOS_SECRET_KEY' "yes")"
-
-if [ -z "$custos_api_key" ] || [ -z "$custos_secret_key" ]; then
-  echo "CUSTOS_API_KEY and CUSTOS_SECRET_KEY are both required for balance monitoring." >&2
-  exit 2
-fi
-
-threshold="$(prompt_value 'Auto-recharge threshold in credits (default 0.5)')"
-threshold="${threshold:-0.5}"
-
-masked_api="$(mask "$custos_api_key")"
-masked_secret="$(mask "$custos_secret_key")"
-
-echo >&2
-echo "About to add Custos credentials:" >&2
-printf '  %-18s: %s\n' "CUSTOS_BASE_URL"   "$custos_base"    >&2
-printf '  %-18s: %s\n' "CUSTOS_API_KEY"    "$masked_api"     >&2
-printf '  %-18s: %s\n' "CUSTOS_SECRET_KEY" "$masked_secret"  >&2
-printf '  %-18s: %s credits\n' "threshold" "$threshold"      >&2
-printf '  %-18s: %s\n' "writes"            "$rc"             >&2
-echo >&2
-confirm "Write?" || { echo "aborted"; exit 1; }
-
-# Re-write env block with all vars — idempotent (replaces previous block).
-case "$agent" in
-  claude)
-    write_env_block "$rc" \
-      "ANTHROPIC_BASE_URL"   "$base"               \
-      "ANTHROPIC_AUTH_TOKEN" "$token"              \
-      "CUSTOS_BASE_URL"      "$custos_base"        \
-      "CUSTOS_API_KEY"       "$custos_api_key"     \
-      "CUSTOS_SECRET_KEY"    "$custos_secret_key"
-    merge_json_env "$HOME/.claude/settings.json" \
-      "ANTHROPIC_BASE_URL"   "$base"               \
-      "ANTHROPIC_AUTH_TOKEN" "$token"              \
-      "CUSTOS_BASE_URL"      "$custos_base"        \
-      "CUSTOS_API_KEY"       "$custos_api_key"     \
-      "CUSTOS_SECRET_KEY"    "$custos_secret_key"
-    ;;
-  gemini)
-    write_env_block "$rc" \
-      "GOOGLE_GEMINI_BASE_URL" "$base"               \
-      "GEMINI_API_KEY"         "$token"              \
-      "CUSTOS_BASE_URL"        "$custos_base"        \
-      "CUSTOS_API_KEY"         "$custos_api_key"     \
-      "CUSTOS_SECRET_KEY"      "$custos_secret_key"
-    ;;
-  openai|cursor|windsurf)
-    write_env_block "$rc" \
-      "OPENAI_BASE_URL"  "$base"               \
-      "OPENAI_API_KEY"   "$token"              \
-      "CUSTOS_BASE_URL"  "$custos_base"        \
-      "CUSTOS_API_KEY"   "$custos_api_key"     \
-      "CUSTOS_SECRET_KEY" "$custos_secret_key"
-    ;;
-esac
-
-echo >&2
-echo "Checking balance..." >&2
-if CUSTOS_BASE_URL="$custos_base" CUSTOS_API_KEY="$custos_api_key" \
-   CUSTOS_SECRET_KEY="$custos_secret_key" bash "$here/scripts/check-balance.sh" 2>&1; then
-  echo >&2
+# Auto-recharge daemon — only when both Custos credentials and balance check are healthy.
+if [ "$custos_set" -eq 1 ] && [ "$balance_ok" -eq 1 ]; then
   echo "Starting auto-recharge monitor in the background..." >&2
   CUSTOS_BASE_URL="$custos_base" CUSTOS_API_KEY="$custos_api_key" \
   CUSTOS_SECRET_KEY="$custos_secret_key" \
@@ -606,12 +746,33 @@ if CUSTOS_BASE_URL="$custos_base" CUSTOS_API_KEY="$custos_api_key" \
   recharge_pid=$!
   echo "Auto-recharge active (PID=${recharge_pid}) — tops up when balance < ${threshold} credits." >&2
   echo "Stop with: kill ${recharge_pid}" >&2
-else
   echo >&2
-  echo "Balance check failed. Verify CUSTOS_BASE_URL, CUSTOS_API_KEY, CUSTOS_SECRET_KEY." >&2
-  echo "Run manually: bash $here/scripts/check-balance.sh" >&2
 fi
 
+# ── Final summary ────────────────────────────────────────────────────────────
+echo "──────────────────────────────────────────────────────────────────────" >&2
+echo " Summary" >&2
+echo "──────────────────────────────────────────────────────────────────────" >&2
+printf '  %-22s: %s\n' "agent"           "$agent" >&2
+case "$verify_exit" in
+  0) printf '  %-22s: %s\n' "LLM routing"     "ok" >&2 ;;
+  3) printf '  %-22s: %s\n' "LLM routing"     "insufficient balance" >&2 ;;
+  *) printf '  %-22s: %s (HTTP not 2xx)\n' "LLM routing" "fail" >&2 ;;
+esac
+if [ "$custos_set" -eq 1 ]; then
+  if [ "$balance_ok" -eq 1 ]; then
+    # balance_value already carries its unit (e.g. "12.345 credits"); avoid duplication.
+    printf '  %-22s: %s\n' "Custos balance" "${balance_value:-?}" >&2
+    printf '  %-22s: active (threshold=%s credits)\n' "Auto-recharge" "$threshold" >&2
+  else
+    printf '  %-22s: %s\n' "Custos balance" "check failed" >&2
+    printf '  %-22s: %s\n' "Auto-recharge" "not started (balance check failed)" >&2
+  fi
+else
+  printf '  %-22s: %s\n' "Custos balance" "not configured" >&2
+  printf '  %-22s: %s\n' "Auto-recharge" "not configured" >&2
+fi
 echo >&2
-echo "✅ All done — LLM routing + balance monitoring configured. Happy hacking!" >&2
-echo "(Verify LLM routing anytime with: bash $here/scripts/verify.sh $agent)" >&2
+echo "✅ Done. Re-verify anytime with: bash $here/scripts/verify.sh $agent" >&2
+[ "$custos_set" -eq 1 ] && echo "   Re-check balance:        bash $here/scripts/check-balance.sh" >&2
+exit 0
