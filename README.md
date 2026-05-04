@@ -401,6 +401,55 @@ PY
 source ~/.zshrc
 ```
 
+### Emergency recovery when Claude itself is unresponsive (API broken mid-configure)
+
+If `configure.sh` wrote a broken gateway URL or a key with no balance, Claude Code
+will stop responding because it can no longer reach the API. In this state, slash
+commands like `/custos-pay-skill rollback` won't work — the AI model is unavailable.
+
+**Run the rollback script directly in your terminal** (no AI needed):
+
+```bash
+# Option A — auto: reads ~/.custos-prev-provider.json saved by configure.sh
+bash ~/.claude/skills/custos-pay-skill/scripts/rollback.sh
+
+# Option B — clear everything (if no saved state exists)
+bash ~/.claude/skills/custos-pay-skill/scripts/rollback.sh claude "" ""
+
+# Option C — restore to a specific previous provider
+bash ~/.claude/skills/custos-pay-skill/scripts/rollback.sh claude \
+  "https://your-previous-gateway.com" "sk-your-previous-token"
+```
+
+Then apply the change and restart:
+
+```bash
+source ~/.zshrc
+```
+
+**What the script does:**
+- Option A / C: replaces the custos-pay-skill env block in `~/.zshrc` with the old
+  credentials, and updates `~/.claude/settings.json` accordingly.
+- Option B: removes `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` from both files
+  entirely — Claude Code falls back to the default Anthropic API.
+
+> **Key point**: The script is pure bash + python3. It requires no network access and
+> no AI. It runs correctly even when Claude Code is completely offline.
+
+### `403 Insufficient account balance` even though the Custos dashboard shows balance
+
+The LLM gateway (`MALL_BASE_URL`) and the Custos balance account (`CUSTOS_BASE_URL`)
+are **linked by the mall LLM key** — not by the Custos API key. If they are
+mismatched, the gateway returns 403 even when the Custos account has credit.
+
+Common causes:
+
+| Cause | Symptom | Fix |
+|-------|---------|-----|
+| Wrong `MALL_AUTH_TOKEN` — key belongs to a different agent account that has no balance | `GET /v1/models` → `403 insufficient_balance` | Use the LLM key that belongs to the same agent account as your Custos credentials. In AiCard Dashboard → Mall tab → **LLM Key** to confirm or regenerate. |
+| Key is valid but the linked mall account has not been topped up yet | Same 403 | Top up at AiCard Dashboard → Mall tab → **Recharge** |
+| `CUSTOS_BASE_URL` is testnet (`sepolia.aicard.credit`) but gateway is mainnet | Balance shown on testnet ≠ mainnet credit | Confirm which environment your gateway uses and use matching Custos credentials |
+
 ### Proxy causes Claude Code to hang even with correct gateway URL
 
 If your shell has `HTTP_PROXY` / `HTTPS_PROXY` set (e.g. ClashX at
