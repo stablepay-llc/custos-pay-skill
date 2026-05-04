@@ -16,20 +16,32 @@ Any menu of that shape is **wrong**. Stop and re-read this file.
 
 ---
 
-## Invocation argument: `rollback`
+## Slash commands — argument-based dispatch
 
-If the user invoked this skill with the argument `rollback` (e.g., typed
-`/custos-pay-skill rollback` in Claude Code), **do only this** — skip steps
-1–6 below entirely:
+If the skill was invoked with an argument, handle it below and **skip the
+normal steps 1–6 entirely**.
 
-1. Run `bash scripts/rollback.sh` (no arguments). It reads the previous
-   provider from `~/.custos-prev-provider.json`, which is saved automatically
-   by configure.sh before every overwrite.
-2. If it succeeds, tell the user: "Previous provider restored. Run
-   `source ~/.zshrc` to apply in the current shell."
-3. If it exits 2 (no saved state), tell the user: "No previous provider
-   saved. Run configure.sh again to set up a new provider — it will save the
-   current one automatically before overwriting."
+### `rollback`
+Run `bash scripts/rollback.sh` (no args). It reads `~/.custos-prev-provider.json`.
+- Success → "Previous provider restored. Run `source ~/.zshrc` to apply."
+- Exit 2 → "No saved state. Run configure.sh to set a new provider (it saves the old one automatically)."
+
+### `balance`
+Run `bash scripts/check-balance.sh`.
+- Success → print balance, agent ID, URL.
+- Exit 2 (missing vars) → "Run `/custos-pay-skill renew` or configure.sh Step 5 to add Custos credentials."
+- Exit 1 → print error; ask user to verify credentials in AiCard Dashboard.
+
+### `renew`
+1. Detect agent: `bash scripts/detect-agent.sh`.
+2. Show current `MALL_BASE_URL` + masked token for that platform.
+3. Prompt for new `MALL_BASE_URL` (Enter = keep current) and new token (always prompt, always mask).
+4. Save old credentials to `~/.custos-prev-provider.json`.
+5. Write new credentials (same helpers as configure.sh Step 3).
+6. Verify with `bash scripts/verify.sh`:
+   - Exit 0 → "Done — credentials updated."
+   - Exit 3 → call `bash scripts/rollback.sh`, tell user to top up.
+   - Exit 1 → print error, no rollback.
 
 ---
 

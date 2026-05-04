@@ -57,6 +57,56 @@ bash custos-pay-skill/scripts/configure.sh
 
 ---
 
+## Slash commands (after installation)
+
+Once the skill is installed, you can invoke these commands directly in your
+agent without going through the full setup flow.
+
+| Command | What it does |
+|---------|-------------|
+| `/custos-pay-skill rollback` | Restore the previous LLM provider credentials |
+| `/custos-pay-skill balance`  | Show your current Custos mall credit balance |
+| `/custos-pay-skill renew`    | Update your gateway URL or token for the current platform |
+
+### `/custos-pay-skill rollback`
+
+Restores the credentials that were active before the last `configure.sh` run.
+The previous state is saved automatically to `~/.custos-prev-provider.json`
+every time you run configure — no manual backup needed.
+
+Useful when:
+- The new gateway has insufficient balance and you need to keep working
+- You want to undo a misconfigured key
+
+### `/custos-pay-skill balance`
+
+Runs `check-balance.sh` and prints your current Custos mall credit balance,
+agent ID, and the platform URL it queried.
+
+Requires `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and `CUSTOS_SECRET_KEY` to be
+set (configured in Step 5). If they are missing, the agent will guide you to
+add them via `/custos-pay-skill renew`.
+
+```
+balance: 3.4968336 USD
+agent:   ag_8d1dcc9885aed6f5
+url:     https://aicard.credit
+```
+
+### `/custos-pay-skill renew`
+
+Guided credential refresh — detects your current platform, shows the active
+`MALL_BASE_URL`, and prompts for a new token (and optionally a new base URL).
+Runs verify after writing, and auto-rolls back if the new gateway returns
+insufficient balance.
+
+Useful when:
+- Your `MALL_AUTH_TOKEN` has been rotated (use the **LLM Key** button in the
+  AiCard Dashboard → Mall tab to regenerate)
+- You want to switch to a different gateway URL without full reconfiguration
+
+---
+
 ## Configuration flow
 
 Once the agent detects the skill folder (or you run `configure.sh`), it walks

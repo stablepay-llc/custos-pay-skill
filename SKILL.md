@@ -52,24 +52,62 @@ description: |
 
 ---
 
-## Invocation argument: `rollback`
+## Slash commands (argument-based dispatch)
 
-If the user typed `/custos-pay-skill rollback` (i.e., `$ARGUMENTS` contains
-`rollback`), **stop here and run only the rollback flow below**. Do NOT
-proceed to Steps 0–5.
+When this skill is invoked with an argument (`$ARGUMENTS` is non-empty),
+dispatch to the matching flow below and **do not run Steps 0–5**.
 
-### Rollback flow
+| Command | What it does |
+|---------|-------------|
+| `/custos-pay-skill rollback` | Restore previous LLM provider credentials |
+| `/custos-pay-skill balance`  | Show current Custos mall credit balance |
+| `/custos-pay-skill renew`    | Update gateway URL / token for current platform |
 
-1. Run `bash scripts/rollback.sh` with **no arguments** — it reads the
-   previous credentials from `~/.custos-prev-provider.json` (written
-   automatically by configure.sh before every overwrite).
-2. If the script exits 0, tell the user:
-   > "Previous provider restored. Run `source ~/.zshrc` if you want the
-   > change to apply in the current terminal immediately."
-3. If the script exits 2 (no saved state), tell the user:
-   > "No previous provider saved. Run `bash scripts/rollback.sh <agent>
-   > <prev_base_url> <prev_token>` manually, or run configure.sh again
-   > to set up a new provider (it saves the old one automatically)."
+---
+
+### `rollback` — restore previous provider
+
+1. Run `bash scripts/rollback.sh` (no arguments). It reads the saved state
+   from `~/.custos-prev-provider.json`, written by configure.sh before every
+   overwrite.
+2. Exit 0 → tell the user:
+   > "Previous provider restored. Run `source ~/.zshrc` to apply in the
+   > current terminal."
+3. Exit 2 (no saved state) → tell the user:
+   > "No previous provider saved. Run configure.sh again to set up a new
+   > provider — it saves the current one automatically before overwriting."
+
+---
+
+### `balance` — check Custos mall credit balance
+
+1. Run `bash scripts/check-balance.sh`.
+2. Exit 0 → print the output (balance, agent ID, URL). Done.
+3. Exit 2 (missing env vars) → tell the user:
+   > "Custos credentials not found in the current environment. Run
+   > `/custos-pay-skill renew` (or configure.sh Step 5) to add
+   > `CUSTOS_BASE_URL`, `CUSTOS_API_KEY`, and `CUSTOS_SECRET_KEY`."
+4. Exit 1 (auth / API error) → print the error and tell the user to verify
+   their Custos credentials in the AiCard Dashboard.
+
+---
+
+### `renew` — update gateway credentials for the current platform
+
+1. Detect the current agent with `bash scripts/detect-agent.sh`.
+2. Show the current values (masked): `MALL_BASE_URL` and the platform token
+   env var (`ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, etc.).
+3. Ask: **"New `MALL_BASE_URL`"** — pre-fill with the current value; user
+   presses Enter to keep it or types a new URL.
+4. Ask: **"New token"** — always prompt; do not pre-fill; mask input.
+5. Save previous credentials to `~/.custos-prev-provider.json` (same as
+   configure.sh does in Step 3 backup).
+6. Write the new credentials using the same helpers as Step 3 of the normal
+   flow (write_env_block for rc file + platform settings file).
+7. Run `bash scripts/verify.sh` — handle exit codes exactly as in Step 4:
+   - Exit 0 → "Done — credentials updated."
+   - Exit 3 → call `bash scripts/rollback.sh` and tell the user to top up.
+   - Exit 1 → print error; do not rollback.
 
 ---
 
